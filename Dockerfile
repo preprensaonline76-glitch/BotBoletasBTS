@@ -1,13 +1,48 @@
-FROM python:3.10
+FROM python:3.12-bookworm
 
-RUN apt-get update && apt-get install -y \
+# ============================================================
+# CONFIGURACIÓN
+# ============================================================
+
+ENV PYTHONUNBUFFERED=1
+ENV DEBIAN_FRONTEND=noninteractive
+
+# ============================================================
+# INSTALAR CHROMIUM + CHROMEDRIVER
+# ============================================================
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
     chromium \
     chromium-driver \
+    ca-certificates \
+    fonts-liberation \
+    fonts-noto-color-emoji \
     && rm -rf /var/lib/apt/lists/*
 
+# ============================================================
+# DIRECTORIO DE TRABAJO
+# ============================================================
+
 WORKDIR /app
-COPY . .
 
-RUN pip install -r requirements.txt
+# ============================================================
+# DEPENDENCIAS
+# ============================================================
 
-CMD ["python", "bot.py"]
+COPY requirements.txt .
+
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
+
+# ============================================================
+# BOT
+# ============================================================
+
+COPY bot.py .
+
+# ============================================================
+# INICIO
+# ============================================================
+
+CMD ["python", "-u", "bot.py"]
