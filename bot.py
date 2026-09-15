@@ -20,6 +20,7 @@ from selenium.common.exceptions import (
     InvalidSessionIdException,
     NoSuchWindowException,
     JavascriptException,
+    StaleElementReferenceException
 )
 
 
@@ -32,7 +33,7 @@ CHAT_ID = os.getenv("CHAT_ID")
 
 URLS = [
     "https://www.ticketmaster.co/event/bts-world-tour-venta-general-sabado-3-octubre",
-    "https://www.ticketmaster.co/event/bts-world-tour-venta-general-viernes-2-octubre",
+    "https://www.ticketmaster.co/event/bts-world-tour-venta-general-viernes-2-octubre"
 ]
 
 
@@ -53,7 +54,7 @@ COOLDOWN_DISPONIBILIDAD = 30
 PAGE_LOAD_TIMEOUT = 30
 SCRIPT_TIMEOUT = 25
 
-# Tiempo para que Ticketmaster termine de cargar
+# Espera después de cargar Ticketmaster
 ESPERA_DESPUES_CARGA_MIN = 2
 ESPERA_DESPUES_CARGA_MAX = 5
 
@@ -66,10 +67,8 @@ FALLOS_ANTES_REINICIO = 2
 INTENTOS_RECUPERACION = 4
 ESPERA_RECUPERACION_BASE = 3
 
-# Máximo de mensajes de error por racha
 MAX_ERRORES_TELEGRAM = 10
 
-# Backoff
 BACKOFF_MIN = 15
 BACKOFF_MAX = 120
 
@@ -230,7 +229,7 @@ def registrar_recuperacion():
 
 
 # ============================================================
-# FORMATO DE DURACIÓN
+# DURACIÓN
 # ============================================================
 
 def formato_duracion(segundos):
@@ -238,15 +237,12 @@ def formato_duracion(segundos):
     segundos = int(segundos)
 
     dias = segundos // 86400
-
     segundos %= 86400
 
     horas = segundos // 3600
-
     segundos %= 3600
 
     minutos = segundos // 60
-
     segundos %= 60
 
     if dias > 0:
@@ -331,7 +327,7 @@ def comprobar_heartbeat():
 
 
 # ============================================================
-# ALERTA DISPONIBLE
+# ALERTA DISPONIBILIDAD
 # ============================================================
 
 def alerta_disponibilidad(url):
@@ -385,7 +381,7 @@ def alerta_desconocido(url):
         f"{url}\n\n"
 
         "El bot no pudo confirmar "
-        "el estado de la página.\n\n"
+        "el estado de Ticketmaster.\n\n"
 
         "🔎 El monitoreo continuará."
     )
@@ -704,7 +700,7 @@ def crear_driver():
 
 
 # ============================================================
-# COMPROBAR DRIVER
+# DRIVER VIVO
 # ============================================================
 
 def driver_vivo():
@@ -1104,6 +1100,13 @@ def obtener_textos_enlaces():
             if href:
                 resultados.append(href)
 
+        except (
+            StaleElementReferenceException,
+            WebDriverException
+        ):
+
+            continue
+
         except Exception:
 
             continue
@@ -1145,7 +1148,7 @@ def obtener_contenido_ticketmaster():
 
 
 # ============================================================
-# DETECCIÓN DE AGOTADO
+# DETECTAR AGOTADO
 # ============================================================
 
 def detectar_agotado_en_texto(texto):
@@ -1159,7 +1162,10 @@ def detectar_agotado_en_texto(texto):
 
     patrones_agotado = [
 
-        # Español
+        # ----------------------------------------------------
+        # ESPAÑOL
+        # ----------------------------------------------------
+
         "agotado",
         "agotada",
         "agotados",
@@ -1183,7 +1189,10 @@ def detectar_agotado_en_texto(texto):
         "sin boletas disponibles",
         "sin tickets disponibles",
 
-        # Inglés
+        # ----------------------------------------------------
+        # INGLÉS
+        # ----------------------------------------------------
+
         "sold out",
         "sold-out",
 
@@ -1197,6 +1206,7 @@ def detectar_agotado_en_texto(texto):
 
         "no seats available",
         "seats unavailable",
+
         "no seats currently available"
     ]
 
@@ -1256,7 +1266,192 @@ def detectar_agotado_en_texto(texto):
 
 
 # ============================================================
-# DIAGNÓSTICO DEL CONTENIDO
+# DETECTAR CONTROLES DE COMPRA
+# ============================================================
+
+def detectar_controles_compra():
+
+    palabras = [
+
+        # Español
+        "comprar boletas",
+        "comprar entradas",
+        "comprar tickets",
+
+        "comprar",
+
+        "seleccionar localidad",
+        "seleccionar asiento",
+        "seleccionar asientos",
+
+        "continuar compra",
+        "continuar",
+
+        # Inglés
+        "buy tickets",
+        "buy now",
+
+        "purchase tickets",
+        "purchase",
+
+        "select seats",
+        "select tickets",
+
+        "choose seats",
+        "choose tickets",
+
+        "get tickets",
+
+        "checkout"
+    ]
+
+    encontrados = []
+
+    try:
+
+        elementos = driver.find_elements(
+            By.CSS_SELECTOR,
+            """
+            button,
+            a,
+            [role='button'],
+            input,
+            [data-testid],
+            [aria-label]
+            """
+        )
+
+    except Exception:
+
+        return []
+
+    for elemento in elementos:
+
+        try:
+
+            if not elemento.is_displayed():
+                continue
+
+            texto = normalizar_texto(
+                elemento.text or ""
+            )
+
+            aria = normalizar_texto(
+                elemento.get_attribute(
+                    "aria-label"
+                ) or ""
+            )
+
+            title = normalizar_texto(
+                elemento.get_attribute(
+                    "title"
+                ) or ""
+            )
+
+            testid = normalizar_texto(
+                elemento.get_attribute(
+                    "data-testid"
+                ) or ""
+            )
+
+            combinado = (
+                f"{texto} "
+                f"{aria} "
+                f"{title} "
+                f"{testid}"
+            )
+
+            for palabra in palabras:
+
+                if palabra in combinado:
+
+                    if palabra not in encontrados:
+
+                        encontrados.append(
+                            palabra
+                        )
+
+                    break
+
+        except (
+            StaleElementReferenceException,
+            WebDriverException
+        ):
+
+            continue
+
+        except Exception:
+
+            continue
+
+    return encontrados
+
+
+# ============================================================
+# DETECTAR INDICADORES DE DISPONIBILIDAD
+# ============================================================
+
+def detectar_indicadores_disponibilidad(
+    texto
+):
+
+    indicadores = [
+
+        # Español
+        "selecciona tus entradas",
+        "selecciona tus boletas",
+        "selecciona tus tickets",
+
+        "seleccione sus entradas",
+        "seleccione sus boletas",
+        "seleccione sus tickets",
+
+        "entradas disponibles",
+        "boletas disponibles",
+        "tickets disponibles",
+
+        "localidades disponibles",
+
+        "seleccionar localidad",
+        "seleccionar asiento",
+        "seleccionar asientos",
+
+        "elige tus entradas",
+        "elige tus boletas",
+
+        # Inglés
+        "select your tickets",
+        "select your seats",
+
+        "choose your seats",
+        "choose your tickets",
+
+        "available tickets",
+        "tickets available",
+
+        "available seats",
+        "seats available"
+    ]
+
+    encontrados = []
+
+    texto = normalizar_texto(
+        texto
+    )
+
+    for indicador in indicadores:
+
+        if indicador in texto:
+
+            encontrados.append(
+                indicador
+            )
+
+    return encontrados
+
+
+# ============================================================
+# MOSTRAR DIAGNÓSTICO
 # ============================================================
 
 def mostrar_diagnostico_contenido(
@@ -1278,7 +1473,6 @@ def mostrar_diagnostico_contenido(
 
         return
 
-    # Comprobación directa adicional
     contiene_agotado = (
         "agotado" in contenido
     )
@@ -1313,21 +1507,14 @@ def mostrar_diagnostico_contenido(
 
 
 # ============================================================
-# DETECTAR DISPONIBILIDAD
+# DETECTAR ESTADO
 #
-# REGLA:
+# PRIORIDAD:
 #
-# AGOTADO / SOLD OUT / ETC.
-#       ↓
-# AGOTADO
-#
-# NO HAY AGOTADO + PÁGINA CARGADA
-#       ↓
-# DISPONIBLE
-#
-# ERROR DE SELENIUM
-#       ↓
-# ERROR
+# 1. AGOTADO
+# 2. CONTROLES / INDICADORES
+# 3. DESCONOCIDO
+# 4. ERROR SI SELENIUM FALLA
 # ============================================================
 
 def detectar_disponibilidad(url):
@@ -1342,9 +1529,9 @@ def detectar_disponibilidad(url):
         log("🔎 Revisando:")
         log(url)
 
-        # ----------------------------------------------------
+        # ====================================================
         # WATCHDOG
-        # ----------------------------------------------------
+        # ====================================================
 
         if not watchdog():
 
@@ -1359,9 +1546,9 @@ def detectar_disponibilidad(url):
 
             return "error"
 
-        # ----------------------------------------------------
-        # CARGAR PÁGINA
-        # ----------------------------------------------------
+        # ====================================================
+        # CARGAR URL
+        # ====================================================
 
         try:
 
@@ -1390,9 +1577,9 @@ def detectar_disponibilidad(url):
 
             return "error"
 
-        # ----------------------------------------------------
-        # ESPERA DE CARGA
-        # ----------------------------------------------------
+        # ====================================================
+        # ESPERAR
+        # ====================================================
 
         time.sleep(
             random.uniform(
@@ -1405,9 +1592,9 @@ def detectar_disponibilidad(url):
 
             return "error"
 
-        # ----------------------------------------------------
+        # ====================================================
         # OBTENER CONTENIDO
-        # ----------------------------------------------------
+        # ====================================================
 
         contenido = (
             obtener_contenido_ticketmaster()
@@ -1416,10 +1603,6 @@ def detectar_disponibilidad(url):
         mostrar_diagnostico_contenido(
             contenido
         )
-
-        # ----------------------------------------------------
-        # SI NO HAY CONTENIDO
-        # ----------------------------------------------------
 
         if not contenido:
 
@@ -1430,18 +1613,24 @@ def detectar_disponibilidad(url):
 
             return "desconocido"
 
-        # ----------------------------------------------------
-        # REGLA PRINCIPAL
-        # ----------------------------------------------------
+        # ====================================================
+        # 1. AGOTADO
+        # ====================================================
         #
-        # SI DICE AGOTADO:
-        # AGOTADO
+        # AGOTADO SIEMPRE TIENE PRIORIDAD.
         #
-        # ----------------------------------------------------
+        # Aunque la página contenga "purchase",
+        # "buy", etc., si también dice "Agotado",
+        # el resultado es AGOTADO.
+        # ====================================================
 
         if detectar_agotado_en_texto(
             contenido
         ):
+
+            log(
+                "❌ AGOTADO CONFIRMADO."
+            )
 
             log(
                 "📊 RESULTADO FINAL: AGOTADO"
@@ -1449,34 +1638,100 @@ def detectar_disponibilidad(url):
 
             return "agotado"
 
-        # ----------------------------------------------------
-        # SI NO DICE AGOTADO
-        # ----------------------------------------------------
-        #
-        # La página cargó correctamente,
-        # por lo tanto se considera disponible.
-        #
-        # ----------------------------------------------------
+        # ====================================================
+        # 2. CONTROLES DE COMPRA
+        # ====================================================
+
+        controles = (
+            detectar_controles_compra()
+        )
+
+        if controles:
+
+            log(
+                "🟢 CONTROLES DE COMPRA DETECTADOS:"
+            )
+
+            log(
+                "🔘 "
+                + ", ".join(
+                    controles[:10]
+                )
+            )
+
+        else:
+
+            log(
+                "⚪ No se detectaron "
+                "controles de compra."
+            )
+
+        # ====================================================
+        # 3. INDICADORES DE DISPONIBILIDAD
+        # ====================================================
+
+        indicadores = (
+            detectar_indicadores_disponibilidad(
+                contenido
+            )
+        )
+
+        if indicadores:
+
+            log(
+                "🟢 INDICADORES DE DISPONIBILIDAD:"
+            )
+
+            log(
+                "🎫 "
+                + ", ".join(
+                    indicadores[:10]
+                )
+            )
+
+        else:
+
+            log(
+                "⚪ No se encontraron "
+                "indicadores explícitos "
+                "de disponibilidad."
+            )
+
+        # ====================================================
+        # 4. DISPONIBLE
+        # ====================================================
+
+        if controles or indicadores:
+
+            log("")
+            log(
+                "🚨🚨🚨 DISPONIBILIDAD DETECTADA 🚨🚨🚨"
+            )
+
+            log(
+                "📊 RESULTADO FINAL: DISPONIBLE"
+            )
+
+            return "disponible"
+
+        # ====================================================
+        # 5. DESCONOCIDO
+        # ====================================================
 
         log(
-            "🟢 No se encontró "
-            "ninguna señal de agotado."
+            "⚠️ No se encontró una señal clara "
+            "de agotado ni disponibilidad."
         )
 
         log(
-            "🚨 Ticketmaster ya no "
-            "muestra agotado."
+            "📊 RESULTADO FINAL: DESCONOCIDO"
         )
 
-        log(
-            "📊 RESULTADO FINAL: DISPONIBLE"
-        )
+        return "desconocido"
 
-        return "disponible"
-
-    # --------------------------------------------------------
-    # SESIÓN INVÁLIDA
-    # --------------------------------------------------------
+    # ========================================================
+    # SESIÓN SELENIUM
+    # ========================================================
 
     except (
         InvalidSessionIdException,
@@ -1493,9 +1748,9 @@ def detectar_disponibilidad(url):
 
         return "error"
 
-    # --------------------------------------------------------
+    # ========================================================
     # WEBDRIVER
-    # --------------------------------------------------------
+    # ========================================================
 
     except WebDriverException as e:
 
@@ -1511,9 +1766,9 @@ def detectar_disponibilidad(url):
 
         return "error"
 
-    # --------------------------------------------------------
+    # ========================================================
     # ERROR GENERAL
-    # --------------------------------------------------------
+    # ========================================================
 
     except Exception as e:
 
@@ -1573,14 +1828,16 @@ def procesar_resultado(
                 "🚨🚨🚨 CAMBIO A DISPONIBLE 🚨🚨🚨"
             )
 
-            alerta_disponibilidad(url)
+            alerta_disponibilidad(
+                url
+            )
 
             ultima_alerta_disponibilidad[
                 url
             ] = ahora
 
         # ----------------------------------------------------
-        # YA ESTABA DISPONIBLE
+        # CONTINÚA DISPONIBLE
         # ----------------------------------------------------
 
         elif (
@@ -1589,7 +1846,9 @@ def procesar_resultado(
             >= COOLDOWN_DISPONIBILIDAD
         ):
 
-            alerta_disponibilidad(url)
+            alerta_disponibilidad(
+                url
+            )
 
             ultima_alerta_disponibilidad[
                 url
@@ -1614,7 +1873,7 @@ def procesar_resultado(
         detecciones_agotado += 1
 
         # ----------------------------------------------------
-        # SOLO AVISA SI CAMBIÓ A AGOTADO
+        # SOLO AVISAR AL CAMBIAR A AGOTADO
         # ----------------------------------------------------
 
         if anterior != "agotado":
@@ -1624,7 +1883,9 @@ def procesar_resultado(
                 "❌ CAMBIO A AGOTADO"
             )
 
-            alerta_agotado(url)
+            alerta_agotado(
+                url
+            )
 
         estado_anterior[url] = (
             "agotado"
@@ -1644,7 +1905,9 @@ def procesar_resultado(
 
         if anterior != "desconocido":
 
-            alerta_desconocido(url)
+            alerta_desconocido(
+                url
+            )
 
         estado_anterior[url] = (
             "desconocido"
@@ -1712,7 +1975,7 @@ def reset_backoff():
 
 
 # ============================================================
-# CICLO DE MONITOREO
+# CICLO
 # ============================================================
 
 def ciclo():
@@ -1749,8 +2012,8 @@ def ciclo():
         # REVISAR URL
         # ----------------------------------------------------
 
-        estado = detectar_disponibilidad(
-            url
+        estado = (
+            detectar_disponibilidad(url)
         )
 
         revisiones_totales += 1
@@ -1790,7 +2053,7 @@ def ciclo():
             continue
 
         # ----------------------------------------------------
-        # REVISIÓN CORRECTA
+        # CORRECTA
         # ----------------------------------------------------
 
         revisiones_correctas += 1
@@ -1849,7 +2112,7 @@ def validar_configuracion():
 
 
 # ============================================================
-# SEÑALES DE APAGADO
+# SEÑALES
 # ============================================================
 
 def manejar_senal(
@@ -1952,7 +2215,7 @@ def main():
 
         "🔎 Monitoreo Ticketmaster preparado\n"
 
-        "♻️ Recuperación automática activada\n"
+        "♻️ Recuperación automática de Chrome activada\n"
 
         "🟢 Sistema 24/7 activado"
 
@@ -2058,7 +2321,7 @@ def main():
             time.sleep(espera)
 
         # ----------------------------------------------------
-        # KEYBOARD INTERRUPT
+        # INTERRUPCIÓN
         # ----------------------------------------------------
 
         except KeyboardInterrupt:
@@ -2117,7 +2380,7 @@ def main():
 
 
 # ============================================================
-# EJECUCIÓN
+# EJECUTAR
 # ============================================================
 
 if __name__ == "__main__":
