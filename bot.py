@@ -616,43 +616,71 @@ def obtener_contenido():
 
     try:
 
-        # ----------------------------------------------------
-        # TEXTO VISIBLE
-        # ----------------------------------------------------
-
         elemento_body = driver.find_element(
             "tag name",
-            "body",
+            "body"
         )
 
         texto = elemento_body.text
-
-        # ----------------------------------------------------
-        # HTML
-        # ----------------------------------------------------
-
         html = driver.page_source
 
-        # ----------------------------------------------------
-        # NORMALIZACIÓN
-        # ----------------------------------------------------
+        texto_normalizado = normalizar_texto(texto)
+        html_normalizado = normalizar_texto(html)
+
+        # ====================================================
+        # DIAGNÓSTICO TEMPORAL
+        # ====================================================
+
+        print(
+            f"📏 Texto visible: "
+            f"{len(texto_normalizado)} caracteres"
+        )
+
+        print(
+            f"📏 HTML: "
+            f"{len(html_normalizado)} caracteres"
+        )
+
+        if "agotado" in texto_normalizado:
+            print(
+                "✅ DIAGNÓSTICO: "
+                "'agotado' encontrado en TEXTO"
+            )
+
+        elif "agotado" in html_normalizado:
+            print(
+                "✅ DIAGNÓSTICO: "
+                "'agotado' encontrado en HTML"
+            )
+
+        else:
+            print(
+                "❌ DIAGNÓSTICO: "
+                "'agotado' NO encontrado"
+            )
+
+        # ====================================================
+        # GUARDAR UNA PEQUEÑA MUESTRA
+        # ====================================================
+
+        print(
+            "📝 Primeros 500 caracteres del texto:"
+        )
+
+        print(
+            texto_normalizado[:500]
+        )
 
         return {
-            "texto": normalizar_texto(
-                texto
-            ),
-
-            "html": normalizar_texto(
-                html
-            ),
+            "texto": texto_normalizado,
+            "html": html_normalizado,
         }
 
     except Exception as e:
 
         print(
             "⚠️ No se pudo obtener "
-            "el contenido: "
-            f"{type(e).__name__}"
+            f"el contenido: {type(e).__name__}"
         )
 
         return None
