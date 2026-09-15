@@ -20,7 +20,6 @@ from selenium.common.exceptions import (
     InvalidSessionIdException,
     NoSuchWindowException,
     JavascriptException,
-    StaleElementReferenceException
 )
 
 
@@ -31,10 +30,9 @@ from selenium.common.exceptions import (
 TOKEN = os.getenv("TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
-
 URLS = [
     "https://www.ticketmaster.co/event/bts-world-tour-venta-general-sabado-3-octubre",
-    "https://www.ticketmaster.co/event/bts-world-tour-venta-general-viernes-2-octubre"
+    "https://www.ticketmaster.co/event/bts-world-tour-venta-general-viernes-2-octubre",
 ]
 
 
@@ -45,30 +43,33 @@ URLS = [
 MIN_ESPERA = 15
 MAX_ESPERA = 25
 
+# Heartbeat cada 5 horas
 HEARTBEAT_INTERVAL = 5 * 60 * 60
 
-# Si continúa disponible, alerta nuevamente después de 30 s.
+# Si está disponible, repetir alerta cada 30 segundos
 COOLDOWN_DISPONIBILIDAD = 30
 
+# Selenium
 PAGE_LOAD_TIMEOUT = 30
 SCRIPT_TIMEOUT = 25
 
+# Tiempo para que Ticketmaster termine de cargar
 ESPERA_DESPUES_CARGA_MIN = 2
 ESPERA_DESPUES_CARGA_MAX = 5
 
 
 # ============================================================
-# RECUPERACIÓN
+# RECUPERACIÓN AUTOMÁTICA
 # ============================================================
 
 FALLOS_ANTES_REINICIO = 2
-
 INTENTOS_RECUPERACION = 4
-
 ESPERA_RECUPERACION_BASE = 3
 
+# Máximo de mensajes de error por racha
 MAX_ERRORES_TELEGRAM = 10
 
+# Backoff
 BACKOFF_MIN = 15
 BACKOFF_MAX = 120
 
@@ -80,13 +81,7 @@ BACKOFF_MAX = 120
 CARPETA_DIAGNOSTICO = "/tmp/ticketmaster_diagnostico"
 
 MAX_CAPTURAS = 3
-
 MAX_TEXTO_DIAGNOSTICO = 1500
-
-
-# ============================================================
-# ESTADO
-# ============================================================
 
 ARCHIVO_ESTADO = "/tmp/ticketmaster_estado.json"
 
@@ -98,35 +93,28 @@ ARCHIVO_ESTADO = "/tmp/ticketmaster_estado.json"
 driver = None
 
 inicio_bot = time.time()
-
 ultima_heartbeat = time.time()
 
 errores_telegram_enviados = 0
 
 fallos_consecutivos = 0
-
 nivel_backoff = 0
 
 recuperaciones_chrome = 0
 
 revisiones_totales = 0
-
 revisiones_correctas = 0
-
 revisiones_error = 0
 
 detecciones_agotado = 0
-
 detecciones_disponible = 0
 
 ultima_revision = None
-
 
 estado_anterior = {
     url: None
     for url in URLS
 }
-
 
 ultima_alerta_disponibilidad = {
     url: 0
@@ -139,9 +127,7 @@ ultima_alerta_disponibilidad = {
 # ============================================================
 
 def log(mensaje):
-
     print(mensaje)
-
     sys.stdout.flush()
 
 
@@ -152,15 +138,11 @@ def log(mensaje):
 def send_telegram(mensaje):
 
     if not TOKEN:
-
         log("❌ TOKEN no configurado.")
-
         return False
 
     if not CHAT_ID:
-
         log("❌ CHAT_ID no configurado.")
-
         return False
 
     try:
@@ -175,7 +157,6 @@ def send_telegram(mensaje):
         )
 
         if respuesta.status_code == 200:
-
             return True
 
         log(
@@ -203,22 +184,17 @@ def send_telegram(mensaje):
 
 
 # ============================================================
-# ERRORES TELEGRAM CONTROLADOS
+# ERRORES CONTROLADOS
 # ============================================================
 
 def enviar_error_controlado(mensaje):
 
     global errores_telegram_enviados
 
-    if (
-        errores_telegram_enviados
-        >= MAX_ERRORES_TELEGRAM
-    ):
+    if errores_telegram_enviados >= MAX_ERRORES_TELEGRAM:
 
         log(
-            "🔇 Límite de errores Telegram "
-            "alcanzado. Se continuará registrando "
-            "solamente en Railway."
+            "🔇 Límite de errores Telegram alcanzado."
         )
 
         return
@@ -233,14 +209,8 @@ def enviar_error_controlado(mensaje):
         f"{MAX_ERRORES_TELEGRAM}"
     )
 
-    send_telegram(
-        mensaje_final
-    )
+    send_telegram(mensaje_final)
 
-
-# ============================================================
-# REGISTRAR RECUPERACIÓN
-# ============================================================
 
 def registrar_recuperacion():
 
@@ -255,14 +225,12 @@ def registrar_recuperacion():
         )
 
     errores_telegram_enviados = 0
-
     fallos_consecutivos = 0
-
     nivel_backoff = 0
 
 
 # ============================================================
-# FORMATO DURACIÓN
+# FORMATO DE DURACIÓN
 # ============================================================
 
 def formato_duracion(segundos):
@@ -328,8 +296,7 @@ def comprobar_heartbeat():
         mensaje = (
             "💓 BOT ACTIVO\n\n"
 
-            f"⏱️ Tiempo activo: "
-            f"{uptime}\n\n"
+            f"⏱️ Tiempo activo: {uptime}\n\n"
 
             f"🔎 Revisiones totales: "
             f"{revisiones_totales}\n"
@@ -354,9 +321,7 @@ def comprobar_heartbeat():
             "🟢 Monitoreo 24/7 activo"
         )
 
-        if send_telegram(
-            mensaje
-        ):
+        if send_telegram(mensaje):
 
             log(
                 "💓 Heartbeat enviado."
@@ -366,7 +331,7 @@ def comprobar_heartbeat():
 
 
 # ============================================================
-# ALERTA DISPONIBILIDAD
+# ALERTA DISPONIBLE
 # ============================================================
 
 def alerta_disponibilidad(url):
@@ -383,9 +348,7 @@ def alerta_disponibilidad(url):
         "⚠️ La disponibilidad puede ser temporal."
     )
 
-    if send_telegram(
-        mensaje
-    ):
+    if send_telegram(mensaje):
 
         log(
             "🚨 ALERTA DE DISPONIBILIDAD ENVIADA."
@@ -403,9 +366,7 @@ def alerta_agotado(url):
         f"{url}"
     )
 
-    if send_telegram(
-        mensaje
-    ):
+    if send_telegram(mensaje):
 
         log(
             "❌ Aviso de agotado enviado."
@@ -424,14 +385,12 @@ def alerta_desconocido(url):
         f"{url}\n\n"
 
         "El bot no pudo confirmar "
-        "disponibilidad ni agotado.\n\n"
+        "el estado de la página.\n\n"
 
         "🔎 El monitoreo continuará."
     )
 
-    if send_telegram(
-        mensaje
-    ):
+    if send_telegram(mensaje):
 
         log(
             "⚠️ Aviso de estado desconocido enviado."
@@ -439,7 +398,7 @@ def alerta_desconocido(url):
 
 
 # ============================================================
-# CARGAR ESTADO
+# ESTADO
 # ============================================================
 
 def cargar_estado():
@@ -451,7 +410,6 @@ def cargar_estado():
         if not os.path.exists(
             ARCHIVO_ESTADO
         ):
-
             return
 
         with open(
@@ -460,15 +418,11 @@ def cargar_estado():
             encoding="utf-8"
         ) as archivo:
 
-            datos = json.load(
-                archivo
-            )
+            datos = json.load(archivo)
 
         for url in URLS:
 
-            estado = datos.get(
-                url
-            )
+            estado = datos.get(url)
 
             if estado in (
                 "disponible",
@@ -488,10 +442,6 @@ def cargar_estado():
             f"⚠️ No se pudo cargar estado: {e}"
         )
 
-
-# ============================================================
-# GUARDAR ESTADO
-# ============================================================
 
 def guardar_estado():
 
@@ -518,7 +468,7 @@ def guardar_estado():
 
 
 # ============================================================
-# PREPARAR DIAGNÓSTICO
+# DIAGNÓSTICO
 # ============================================================
 
 def preparar_diagnostico():
@@ -537,10 +487,6 @@ def preparar_diagnostico():
         )
 
 
-# ============================================================
-# LIMPIAR CAPTURAS
-# ============================================================
-
 def limpiar_capturas():
 
     try:
@@ -556,15 +502,11 @@ def limpiar_capturas():
                 nombre
             )
 
-            if os.path.isfile(
-                ruta
-            ):
+            if os.path.isfile(ruta):
 
                 archivos.append(
                     (
-                        os.path.getmtime(
-                            ruta
-                        ),
+                        os.path.getmtime(ruta),
                         ruta
                     )
                 )
@@ -579,30 +521,18 @@ def limpiar_capturas():
         ]:
 
             try:
-
-                os.remove(
-                    ruta
-                )
+                os.remove(ruta)
 
             except Exception:
-
                 pass
 
     except Exception:
-
         pass
 
 
-# ============================================================
-# GUARDAR CAPTURA
-# ============================================================
-
-def guardar_captura_error(
-    motivo
-):
+def guardar_captura_error(motivo):
 
     if not driver_vivo():
-
         return
 
     try:
@@ -614,7 +544,8 @@ def guardar_captura_error(
         )
 
         nombre = (
-            f"error_{timestamp}_"
+            f"error_"
+            f"{timestamp}_"
             f"{motivo}.png"
         )
 
@@ -623,9 +554,7 @@ def guardar_captura_error(
             nombre
         )
 
-        driver.save_screenshot(
-            ruta
-        )
+        driver.save_screenshot(ruta)
 
         log(
             f"📸 Captura guardada: {ruta}"
@@ -641,7 +570,7 @@ def guardar_captura_error(
 
 
 # ============================================================
-# CREAR DRIVER
+# CREAR CHROME
 # ============================================================
 
 def crear_driver():
@@ -656,23 +585,11 @@ def crear_driver():
         "/usr/bin/chromium"
     )
 
-    # --------------------------------------------------------
-    # Carga rápida
-    # --------------------------------------------------------
-
     options.page_load_strategy = "eager"
-
-    # --------------------------------------------------------
-    # Headless
-    # --------------------------------------------------------
 
     options.add_argument(
         "--headless=new"
     )
-
-    # --------------------------------------------------------
-    # Docker / Railway
-    # --------------------------------------------------------
 
     options.add_argument(
         "--no-sandbox"
@@ -685,10 +602,6 @@ def crear_driver():
     options.add_argument(
         "--disable-dev-shm-usage"
     )
-
-    # --------------------------------------------------------
-    # Estabilidad
-    # --------------------------------------------------------
 
     options.add_argument(
         "--disable-gpu"
@@ -750,12 +663,8 @@ def crear_driver():
         "--window-size=1365,768"
     )
 
-    # --------------------------------------------------------
-    # Perfil independiente
-    # --------------------------------------------------------
-
     perfil = (
-        "/tmp/ticketmaster-profile-"
+        f"/tmp/ticketmaster-profile-"
         f"{os.getpid()}-"
         f"{int(time.time())}"
     )
@@ -763,10 +672,6 @@ def crear_driver():
     options.add_argument(
         f"--user-data-dir={perfil}"
     )
-
-    # --------------------------------------------------------
-    # CHROMEDRIVER
-    # --------------------------------------------------------
 
     service = Service(
         executable_path="/usr/bin/chromedriver"
@@ -789,9 +694,7 @@ def crear_driver():
         SCRIPT_TIMEOUT
     )
 
-    navegador.implicitly_wait(
-        1
-    )
+    navegador.implicitly_wait(1)
 
     log(
         "✅ Selenium creado correctamente."
@@ -801,7 +704,7 @@ def crear_driver():
 
 
 # ============================================================
-# DRIVER VIVO
+# COMPROBAR DRIVER
 # ============================================================
 
 def driver_vivo():
@@ -809,7 +712,6 @@ def driver_vivo():
     global driver
 
     if driver is None:
-
         return False
 
     try:
@@ -840,7 +742,6 @@ def cerrar_driver():
     global driver
 
     if driver is None:
-
         return
 
     try:
@@ -975,9 +876,7 @@ def iniciar_driver():
             "❌ No se pudo iniciar Chrome:"
         )
 
-        log(
-            error
-        )
+        log(error)
 
         cerrar_driver()
 
@@ -990,7 +889,7 @@ def iniciar_driver():
 
 
 # ============================================================
-# RECUPERACIÓN CHROME
+# RECUPERAR CHROME
 # ============================================================
 
 def recuperar_chrome():
@@ -1032,13 +931,10 @@ def recuperar_chrome():
         )
 
         log(
-            f"⏳ Esperando "
-            f"{espera}s..."
+            f"⏳ Esperando {espera}s..."
         )
 
-        time.sleep(
-            espera
-        )
+        time.sleep(espera)
 
     log(
         "❌ Recuperación no completada."
@@ -1051,31 +947,26 @@ def recuperar_chrome():
 # NORMALIZAR TEXTO
 # ============================================================
 
-def normalizar_texto(
-    texto
-):
+def normalizar_texto(texto):
 
     if not texto:
-
         return ""
 
-    texto = (
-        texto
-        .replace(
-            "\u00a0",
-            " "
-        )
-        .replace(
-            "\r",
-            "\n"
-        )
+    texto = texto.replace(
+        "\u00a0",
+        " "
+    )
+
+    texto = texto.replace(
+        "\r",
+        "\n"
     )
 
     return texto.lower()
 
 
 # ============================================================
-# OBTENER BODY.INNER TEXT
+# BODY INNER TEXT
 # ============================================================
 
 def obtener_body_innertext():
@@ -1104,7 +995,7 @@ def obtener_body_innertext():
 
 
 # ============================================================
-# OBTENER DOCUMENT.INNER TEXT
+# DOCUMENT INNER TEXT
 # ============================================================
 
 def obtener_document_innertext():
@@ -1133,7 +1024,7 @@ def obtener_document_innertext():
 
 
 # ============================================================
-# OBTENER HTML
+# HTML
 # ============================================================
 
 def obtener_html():
@@ -1154,7 +1045,7 @@ def obtener_html():
 
 
 # ============================================================
-# OBTENER TEXTOS DE ENLACES
+# TEXTOS DE ENLACES
 # ============================================================
 
 def obtener_textos_enlaces():
@@ -1177,8 +1068,7 @@ def obtener_textos_enlaces():
         try:
 
             texto = (
-                elemento.text
-                or ""
+                elemento.text or ""
             ).strip()
 
             aria = (
@@ -1203,43 +1093,22 @@ def obtener_textos_enlaces():
             ).strip()
 
             if texto:
-
-                resultados.append(
-                    texto
-                )
+                resultados.append(texto)
 
             if aria:
-
-                resultados.append(
-                    aria
-                )
+                resultados.append(aria)
 
             if title:
-
-                resultados.append(
-                    title
-                )
+                resultados.append(title)
 
             if href:
-
-                resultados.append(
-                    href
-                )
-
-        except (
-            StaleElementReferenceException,
-            WebDriverException
-        ):
-
-            continue
+                resultados.append(href)
 
         except Exception:
 
             continue
 
-    return "\n".join(
-        resultados
-    )
+    return "\n".join(resultados)
 
 
 # ============================================================
@@ -1250,143 +1119,136 @@ def obtener_contenido_ticketmaster():
 
     partes = []
 
-    body = (
-        obtener_body_innertext()
-    )
+    body = obtener_body_innertext()
 
     if body:
+        partes.append(body)
 
-        partes.append(
-            body
-        )
-
-    document = (
-        obtener_document_innertext()
-    )
+    document = obtener_document_innertext()
 
     if document:
-
-        partes.append(
-            document
-        )
-
-    html = (
-        obtener_html()
-    )
-
-    if html:
-
-        partes.append(
-            html
-        )
-
-    enlaces = (
-        obtener_textos_enlaces()
-    )
-
-    if enlaces:
-
-        partes.append(
-            enlaces
-        )
-
-    contenido = "\n".join(
-        partes
-    )
-
-    return normalizar_texto(
-        contenido
-    )
-
-
-# ============================================================
-# DETECTAR AGOTADO EN HTML
-# ============================================================
-
-def detectar_agotado_en_html():
+        partes.append(document)
 
     html = obtener_html()
 
-    html_normalizado = (
-        normalizar_texto(
-            html
-        )
+    if html:
+        partes.append(html)
+
+    enlaces = obtener_textos_enlaces()
+
+    if enlaces:
+        partes.append(enlaces)
+
+    return normalizar_texto(
+        "\n".join(partes)
     )
 
-    if "agotado" in html_normalizado:
-
-        log(
-            "🔴🔴🔴 'AGOTADO' ENCONTRADO "
-            "DIRECTAMENTE EN EL HTML."
-        )
-
-        return True
-
-    return False
-
 
 # ============================================================
-# DETECTAR AGOTADO EN TEXTO
+# DETECCIÓN DE AGOTADO
 # ============================================================
 
-def detectar_agotado_en_texto(
-    texto
-):
+def detectar_agotado_en_texto(texto):
 
-    palabras = [
+    if not texto:
+        return False
 
+    texto_normalizado = normalizar_texto(
+        texto
+    )
+
+    patrones_agotado = [
+
+        # Español
         "agotado",
         "agotada",
         "agotados",
         "agotadas",
 
-        "sold out",
-
-        "no hay entradas",
-        "no hay boletas",
-
-        "no tickets available",
-
-        "tickets are currently unavailable",
-
-        "currently unavailable",
-
-        "entradas no disponibles",
-
-        "boletas no disponibles",
+        "entradas agotadas",
+        "boletas agotadas",
+        "tickets agotados",
 
         "evento agotado",
 
-        "entradas agotadas",
+        "no hay entradas",
+        "no hay boletas",
+        "no hay tickets",
 
-        "boletas agotadas",
+        "entradas no disponibles",
+        "boletas no disponibles",
+        "tickets no disponibles",
 
+        "sin entradas disponibles",
+        "sin boletas disponibles",
+        "sin tickets disponibles",
+
+        # Inglés
+        "sold out",
+        "sold-out",
+
+        "no tickets available",
         "tickets unavailable",
 
-        "tickets no disponibles"
+        "tickets are currently unavailable",
+        "currently unavailable",
+
+        "tickets not available",
+
+        "no seats available",
+        "seats unavailable",
+        "no seats currently available"
     ]
 
-    texto = normalizar_texto(
-        texto
-    )
+    for patron in patrones_agotado:
 
-    for palabra in palabras:
+        if patron in texto_normalizado:
 
-        if palabra in texto:
-
+            log("")
             log(
-                ""
+                "🔴🔴🔴 AGOTADO DETECTADO 🔴🔴🔴"
             )
 
             log(
-                "❌❌❌ SEÑAL EXPLÍCITA "
-                "DE AGOTADO ❌❌❌"
+                f"🎯 Señal encontrada: "
+                f"'{patron}'"
             )
 
-            log(
-                f"🔴 Encontrado: "
-                f"'{palabra}'"
+            posicion = (
+                texto_normalizado.find(
+                    patron
+                )
             )
+
+            inicio = max(
+                0,
+                posicion - 200
+            )
+
+            fin = min(
+                len(texto_normalizado),
+                posicion
+                + len(patron)
+                + 300
+            )
+
+            contexto = (
+                texto_normalizado[
+                    inicio:fin
+                ]
+            )
+
+            contexto = re.sub(
+                r"\s+",
+                " ",
+                contexto
+            ).strip()
+
+            log(
+                "📌 Contexto:"
+            )
+
+            log(contexto)
 
             return True
 
@@ -1394,82 +1256,14 @@ def detectar_agotado_en_texto(
 
 
 # ============================================================
-# DETECTAR AGOTADO EN ENLACES
-# ============================================================
-
-def detectar_agotado_en_enlaces():
-
-    try:
-
-        elementos = driver.find_elements(
-            By.TAG_NAME,
-            "a"
-        )
-
-    except Exception:
-
-        return False
-
-    for elemento in elementos:
-
-        try:
-
-            texto = normalizar_texto(
-                elemento.text
-                or ""
-            )
-
-            aria = normalizar_texto(
-                elemento.get_attribute(
-                    "aria-label"
-                )
-                or ""
-            )
-
-            title = normalizar_texto(
-                elemento.get_attribute(
-                    "title"
-                )
-                or ""
-            )
-
-            combinado = (
-                f"{texto} "
-                f"{aria} "
-                f"{title}"
-            )
-
-            if "agotado" in combinado:
-
-                log(
-                    "🔴 'AGOTADO' encontrado "
-                    "en enlace de Ticketmaster."
-                )
-
-                log(
-                    f"🔗 {texto[:200]}"
-                )
-
-                return True
-
-        except Exception:
-
-            continue
-
-    return False
-
-
-# ============================================================
-# DIAGNÓSTICO DE LOS 324 CARACTERES
+# DIAGNÓSTICO DEL CONTENIDO
 # ============================================================
 
 def mostrar_diagnostico_contenido(
     contenido
 ):
 
-    longitud = len(
-        contenido
-    )
+    longitud = len(contenido)
 
     log(
         f"📄 Contenido obtenido: "
@@ -1484,7 +1278,17 @@ def mostrar_diagnostico_contenido(
 
         return
 
-    # Solo mostrar si es sospechosamente pequeño.
+    # Comprobación directa adicional
+    contiene_agotado = (
+        "agotado" in contenido
+    )
+
+    log(
+        "🔬 Contiene palabra "
+        f"'agotado': "
+        f"{contiene_agotado}"
+    )
+
     if longitud <= 1000:
 
         limpio = re.sub(
@@ -1509,261 +1313,24 @@ def mostrar_diagnostico_contenido(
 
 
 # ============================================================
-# CONTROLES DE COMPRA
-# ============================================================
-
-def detectar_controles_compra():
-
-    palabras = [
-
-        "comprar boletas",
-        "comprar entradas",
-        "comprar tickets",
-
-        "buy tickets",
-        "buy now",
-
-        "purchase tickets",
-        "purchase",
-
-        "seleccionar localidad",
-        "seleccionar asiento",
-        "seleccionar asientos",
-
-        "select seats",
-        "select tickets",
-
-        "choose seats",
-        "choose tickets",
-
-        "get tickets"
-    ]
-
-    encontrados = []
-
-    try:
-
-        elementos = driver.find_elements(
-            By.CSS_SELECTOR,
-            """
-            button,
-            a,
-            [role='button'],
-            input,
-            [data-testid],
-            [aria-label]
-            """
-        )
-
-    except Exception:
-
-        return []
-
-    for elemento in elementos:
-
-        try:
-
-            if not elemento.is_displayed():
-
-                continue
-
-            texto = normalizar_texto(
-                elemento.text
-                or ""
-            )
-
-            aria = normalizar_texto(
-                elemento.get_attribute(
-                    "aria-label"
-                )
-                or ""
-            )
-
-            title = normalizar_texto(
-                elemento.get_attribute(
-                    "title"
-                )
-                or ""
-            )
-
-            testid = normalizar_texto(
-                elemento.get_attribute(
-                    "data-testid"
-                )
-                or ""
-            )
-
-            combinado = (
-                f"{texto} "
-                f"{aria} "
-                f"{title} "
-                f"{testid}"
-            )
-
-            for palabra in palabras:
-
-                if palabra in combinado:
-
-                    if palabra not in encontrados:
-
-                        encontrados.append(
-                            palabra
-                        )
-
-                    break
-
-        except Exception:
-
-            continue
-
-    return encontrados
-
-
-# ============================================================
-# INDICADORES DISPONIBILIDAD
-# ============================================================
-
-def detectar_indicadores_disponibilidad(
-    texto
-):
-
-    indicadores = [
-
-        "selecciona tus entradas",
-        "selecciona tus boletas",
-        "selecciona tus tickets",
-
-        "seleccione sus entradas",
-        "seleccione sus boletas",
-
-        "select your tickets",
-        "select your seats",
-
-        "choose your seats",
-        "choose your tickets",
-
-        "available tickets",
-        "tickets available",
-
-        "boletas disponibles",
-        "entradas disponibles",
-
-        "localidades disponibles",
-
-        "seleccionar localidad",
-        "seleccionar asiento",
-        "seleccionar asientos"
-    ]
-
-    encontrados = []
-
-    for indicador in indicadores:
-
-        if indicador in texto:
-
-            encontrados.append(
-                indicador
-            )
-
-    return encontrados
-
-
-# ============================================================
-# PUNTUACIÓN DISPONIBILIDAD
-# ============================================================
-
-def calcular_puntuacion(
-    texto,
-    controles
-):
-
-    puntuacion = 0
-
-    evidencias = []
-
-    # --------------------------------------------------------
-    # CONTROL INTERACTIVO
-    # --------------------------------------------------------
-
-    if controles:
-
-        puntuacion += 4
-
-        evidencias.append(
-            "control interactivo"
-        )
-
-    # --------------------------------------------------------
-    # TEXTO FUERTE DE COMPRA
-    # --------------------------------------------------------
-
-    palabras_compra = [
-
-        "comprar boletas",
-        "comprar entradas",
-        "comprar tickets",
-
-        "buy tickets",
-        "buy now",
-
-        "purchase tickets",
-        "purchase",
-
-        "seleccionar localidad",
-        "seleccionar asiento",
-        "seleccionar asientos",
-
-        "select seats",
-        "select tickets",
-
-        "choose seats",
-        "choose tickets"
-    ]
-
-    for palabra in palabras_compra:
-
-        if palabra in texto:
-
-            puntuacion += 3
-
-            evidencias.append(
-                f"texto:{palabra}"
-            )
-
-            break
-
-    # --------------------------------------------------------
-    # INDICADORES
-    # --------------------------------------------------------
-
-    indicadores = (
-        detectar_indicadores_disponibilidad(
-            texto
-        )
-    )
-
-    if indicadores:
-
-        puntuacion += 3
-
-        evidencias.append(
-            "disponibilidad:"
-            + indicadores[0]
-        )
-
-    return (
-        puntuacion,
-        evidencias
-    )
-
-
-# ============================================================
 # DETECTAR DISPONIBILIDAD
+#
+# REGLA:
+#
+# AGOTADO / SOLD OUT / ETC.
+#       ↓
+# AGOTADO
+#
+# NO HAY AGOTADO + PÁGINA CARGADA
+#       ↓
+# DISPONIBLE
+#
+# ERROR DE SELENIUM
+#       ↓
+# ERROR
 # ============================================================
 
-def detectar_disponibilidad(
-    url
-):
+def detectar_disponibilidad(url):
 
     if not driver_vivo():
 
@@ -1772,16 +1339,12 @@ def detectar_disponibilidad(
     try:
 
         log("")
-        log(
-            "🔎 Revisando:"
-        )
-        log(
-            url
-        )
+        log("🔎 Revisando:")
+        log(url)
 
-        # ====================================================
+        # ----------------------------------------------------
         # WATCHDOG
-        # ====================================================
+        # ----------------------------------------------------
 
         if not watchdog():
 
@@ -1796,15 +1359,13 @@ def detectar_disponibilidad(
 
             return "error"
 
-        # ====================================================
+        # ----------------------------------------------------
         # CARGAR PÁGINA
-        # ====================================================
+        # ----------------------------------------------------
 
         try:
 
-            driver.get(
-                url
-            )
+            driver.get(url)
 
         except TimeoutException:
 
@@ -1829,9 +1390,9 @@ def detectar_disponibilidad(
 
             return "error"
 
-        # ====================================================
-        # ESPERA JAVASCRIPT
-        # ====================================================
+        # ----------------------------------------------------
+        # ESPERA DE CARGA
+        # ----------------------------------------------------
 
         time.sleep(
             random.uniform(
@@ -1844,33 +1405,9 @@ def detectar_disponibilidad(
 
             return "error"
 
-        # ====================================================
-        # HTML DIRECTO
-        # ====================================================
-
-        if detectar_agotado_en_html():
-
-            log(
-                "📊 RESULTADO FINAL: AGOTADO"
-            )
-
-            return "agotado"
-
-        # ====================================================
-        # ENLACES
-        # ====================================================
-
-        if detectar_agotado_en_enlaces():
-
-            log(
-                "📊 RESULTADO FINAL: AGOTADO"
-            )
-
-            return "agotado"
-
-        # ====================================================
-        # CONTENIDO COMPLETO
-        # ====================================================
+        # ----------------------------------------------------
+        # OBTENER CONTENIDO
+        # ----------------------------------------------------
 
         contenido = (
             obtener_contenido_ticketmaster()
@@ -1879,6 +1416,10 @@ def detectar_disponibilidad(
         mostrar_diagnostico_contenido(
             contenido
         )
+
+        # ----------------------------------------------------
+        # SI NO HAY CONTENIDO
+        # ----------------------------------------------------
 
         if not contenido:
 
@@ -1889,9 +1430,14 @@ def detectar_disponibilidad(
 
             return "desconocido"
 
-        # ====================================================
-        # TEXTO
-        # ====================================================
+        # ----------------------------------------------------
+        # REGLA PRINCIPAL
+        # ----------------------------------------------------
+        #
+        # SI DICE AGOTADO:
+        # AGOTADO
+        #
+        # ----------------------------------------------------
 
         if detectar_agotado_en_texto(
             contenido
@@ -1903,66 +1449,34 @@ def detectar_disponibilidad(
 
             return "agotado"
 
-        # ====================================================
-        # CONTROLES
-        # ====================================================
+        # ----------------------------------------------------
+        # SI NO DICE AGOTADO
+        # ----------------------------------------------------
+        #
+        # La página cargó correctamente,
+        # por lo tanto se considera disponible.
+        #
+        # ----------------------------------------------------
 
-        controles = (
-            detectar_controles_compra()
-        )
-
-        # ====================================================
-        # PUNTUACIÓN
-        # ====================================================
-
-        puntuacion, evidencias = (
-            calcular_puntuacion(
-                contenido,
-                controles
-            )
+        log(
+            "🟢 No se encontró "
+            "ninguna señal de agotado."
         )
 
         log(
-            f"🧠 Puntuación: "
-            f"{puntuacion}"
+            "🚨 Ticketmaster ya no "
+            "muestra agotado."
         )
-
-        if evidencias:
-
-            log(
-                "🔍 Evidencias: "
-                + ", ".join(
-                    evidencias[:10]
-                )
-            )
-
-        # ====================================================
-        # DISPONIBLE
-        # ====================================================
-
-        if puntuacion >= 6:
-
-            log(
-                "🚨🚨🚨 DISPONIBILIDAD "
-                "DETECTADA 🚨🚨🚨"
-            )
-
-            return "disponible"
-
-        # ====================================================
-        # DESCONOCIDO
-        # ====================================================
 
         log(
-            "⚠️ No se encontró una señal clara "
-            "de agotado o disponibilidad."
+            "📊 RESULTADO FINAL: DISPONIBLE"
         )
 
-        return "desconocido"
+        return "disponible"
 
-    # ========================================================
-    # ERRORES SELENIUM
-    # ========================================================
+    # --------------------------------------------------------
+    # SESIÓN INVÁLIDA
+    # --------------------------------------------------------
 
     except (
         InvalidSessionIdException,
@@ -1970,8 +1484,7 @@ def detectar_disponibilidad(
     ) as e:
 
         log(
-            f"❌ Sesión Selenium inválida: "
-            f"{e}"
+            f"❌ Sesión Selenium inválida: {e}"
         )
 
         guardar_captura_error(
@@ -1980,15 +1493,17 @@ def detectar_disponibilidad(
 
         return "error"
 
+    # --------------------------------------------------------
+    # WEBDRIVER
+    # --------------------------------------------------------
+
     except WebDriverException as e:
 
         log(
             "⚠️ WebDriverException:"
         )
 
-        log(
-            str(e)
-        )
+        log(str(e))
 
         guardar_captura_error(
             "webdriver"
@@ -1996,15 +1511,17 @@ def detectar_disponibilidad(
 
         return "error"
 
+    # --------------------------------------------------------
+    # ERROR GENERAL
+    # --------------------------------------------------------
+
     except Exception as e:
 
         log(
             "⚠️ Error inesperado:"
         )
 
-        log(
-            str(e)
-        )
+        log(str(e))
 
         guardar_captura_error(
             "inesperado"
@@ -2023,13 +1540,13 @@ def procesar_resultado(
 ):
 
     global estado_anterior
+
     global ultima_alerta_disponibilidad
+
     global detecciones_agotado
     global detecciones_disponible
 
-    anterior = estado_anterior[
-        url
-    ]
+    anterior = estado_anterior[url]
 
     log(
         f"📊 {url} → {estado}"
@@ -2045,38 +1562,42 @@ def procesar_resultado(
 
         ahora = time.time()
 
-        # Primera detección
+        # ----------------------------------------------------
+        # CAMBIO A DISPONIBLE
+        # ----------------------------------------------------
+
         if anterior != "disponible":
 
-            alerta_disponibilidad(
-                url
+            log("")
+            log(
+                "🚨🚨🚨 CAMBIO A DISPONIBLE 🚨🚨🚨"
             )
+
+            alerta_disponibilidad(url)
 
             ultima_alerta_disponibilidad[
                 url
             ] = ahora
 
-        # Sigue disponible:
-        # repetir cada 30 segundos
+        # ----------------------------------------------------
+        # YA ESTABA DISPONIBLE
+        # ----------------------------------------------------
+
         elif (
             ahora
-            - ultima_alerta_disponibilidad[
-                url
-            ]
+            - ultima_alerta_disponibilidad[url]
             >= COOLDOWN_DISPONIBILIDAD
         ):
 
-            alerta_disponibilidad(
-                url
-            )
+            alerta_disponibilidad(url)
 
             ultima_alerta_disponibilidad[
                 url
             ] = ahora
 
-        estado_anterior[
-            url
-        ] = "disponible"
+        estado_anterior[url] = (
+            "disponible"
+        )
 
         guardar_estado()
 
@@ -2092,18 +1613,22 @@ def procesar_resultado(
 
         detecciones_agotado += 1
 
-        # Avisar solamente cuando cambia
-        # a agotado.
+        # ----------------------------------------------------
+        # SOLO AVISA SI CAMBIÓ A AGOTADO
+        # ----------------------------------------------------
 
         if anterior != "agotado":
 
-            alerta_agotado(
-                url
+            log("")
+            log(
+                "❌ CAMBIO A AGOTADO"
             )
 
-        estado_anterior[
-            url
-        ] = "agotado"
+            alerta_agotado(url)
+
+        estado_anterior[url] = (
+            "agotado"
+        )
 
         guardar_estado()
 
@@ -2119,17 +1644,13 @@ def procesar_resultado(
 
         if anterior != "desconocido":
 
-            alerta_desconocido(
-                url
-            )
+            alerta_desconocido(url)
 
-        estado_anterior[
-            url
-        ] = "desconocido"
+        estado_anterior[url] = (
+            "desconocido"
+        )
 
         guardar_estado()
-
-        registrar_recuperacion()
 
         return
 
@@ -2144,8 +1665,8 @@ def procesar_resultado(
         )
 
         log(
-            "ℹ️ Se conserva el último "
-            "estado conocido."
+            "ℹ️ Se conserva "
+            "el último estado conocido."
         )
 
         return
@@ -2167,7 +1688,8 @@ def obtener_espera_backoff():
     espera = min(
         BACKOFF_MIN
         * (
-            2 ** (
+            2
+            ** (
                 nivel_backoff - 1
             )
         ),
@@ -2190,21 +1712,23 @@ def reset_backoff():
 
 
 # ============================================================
-# CICLO
+# CICLO DE MONITOREO
 # ============================================================
 
 def ciclo():
 
     global fallos_consecutivos
+
     global revisiones_totales
     global revisiones_correctas
     global revisiones_error
+
     global ultima_revision
 
     for url in URLS:
 
         # ----------------------------------------------------
-        # DRIVER
+        # COMPROBAR CHROME
         # ----------------------------------------------------
 
         if not driver_vivo():
@@ -2222,13 +1746,11 @@ def ciclo():
                 return
 
         # ----------------------------------------------------
-        # REVISIÓN
+        # REVISAR URL
         # ----------------------------------------------------
 
-        estado = (
-            detectar_disponibilidad(
-                url
-            )
+        estado = detectar_disponibilidad(
+            url
         )
 
         revisiones_totales += 1
@@ -2268,7 +1790,7 @@ def ciclo():
             continue
 
         # ----------------------------------------------------
-        # CORRECTO
+        # REVISIÓN CORRECTA
         # ----------------------------------------------------
 
         revisiones_correctas += 1
@@ -2284,7 +1806,7 @@ def ciclo():
 
 
 # ============================================================
-# VALIDACIÓN
+# VALIDAR CONFIGURACIÓN
 # ============================================================
 
 def validar_configuracion():
@@ -2327,7 +1849,7 @@ def validar_configuracion():
 
 
 # ============================================================
-# SEÑALES
+# SEÑALES DE APAGADO
 # ============================================================
 
 def manejar_senal(
@@ -2388,7 +1910,7 @@ def main():
     log("")
 
     # --------------------------------------------------------
-    # VALIDACIÓN
+    # CONFIGURACIÓN
     # --------------------------------------------------------
 
     if not validar_configuracion():
@@ -2457,7 +1979,8 @@ def main():
         )
 
         log(
-            "♻️ Se intentará recuperar automáticamente."
+            "♻️ Se intentará recuperar "
+            "automáticamente."
         )
 
     # ========================================================
@@ -2532,13 +2055,11 @@ def main():
                 f"{espera}s."
             )
 
-            time.sleep(
-                espera
-            )
+            time.sleep(espera)
 
-        # ====================================================
-        # CTRL+C
-        # ====================================================
+        # ----------------------------------------------------
+        # KEYBOARD INTERRUPT
+        # ----------------------------------------------------
 
         except KeyboardInterrupt:
 
@@ -2550,9 +2071,9 @@ def main():
 
             break
 
-        # ====================================================
+        # ----------------------------------------------------
         # ERROR GENERAL
-        # ====================================================
+        # ----------------------------------------------------
 
         except Exception as e:
 
@@ -2569,8 +2090,10 @@ def main():
             )
 
             enviar_error_controlado(
+
                 "Error general del proceso:\n\n"
                 f"{str(e)[:1200]}"
+
             )
 
             cerrar_driver()
@@ -2586,9 +2109,7 @@ def main():
                 f"de error en {espera}s."
             )
 
-            time.sleep(
-                espera
-            )
+            time.sleep(espera)
 
             recuperar_chrome()
 
@@ -2596,7 +2117,7 @@ def main():
 
 
 # ============================================================
-# EJECUTAR
+# EJECUCIÓN
 # ============================================================
 
 if __name__ == "__main__":
