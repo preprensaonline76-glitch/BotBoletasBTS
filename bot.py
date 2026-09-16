@@ -1,2060 +1,1338 @@
 import os
+import re
 import time
 import random
-import sys
-import re
-import requests
+import threading
+from datetime import datetime
 
+import requests
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
+from selenium.common.exceptions import (
+    WebDriverException,
+    TimeoutException,
+    NoSuchElementException,
+)
 
 
 # ============================================================
-# 🔐 VARIABLES DE RAILWAY
+# CONFIGURACIÓN
 # ============================================================
 
 TOKEN = os.getenv("TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
-
-# ============================================================
-# 🎫 URLS DE TICKETMASTER
-# ============================================================
-
 URLS = [
     "https://www.ticketmaster.co/event/bts-world-tour-venta-general-sabado-3-octubre",
-    "https://www.ticketmaster.co/event/bts-world-tour-venta-general-viernes-2-octubre"
+    "https://www.ticketmaster.co/event/bts-world-tour-venta-general-viernes-2-octubre",
 ]
 
 EVENTOS = {
     URLS[0]: "SÁBADO 3 DE OCTUBRE",
-    URLS[1]: "VIERNES 2 DE OCTUBRE"
+    URLS[1]: "VIERNES 2 DE OCTUBRE",
 }
 
+# Tiempo normal entre ciclos
+ESPERA_MIN = 20
+ESPERA_MAX = 30
 
-# ============================================================
-# ⚙️ CONFIGURACIÓN
-# ============================================================
+# Heartbeat
+HEARTBEAT_HORAS = 5
+HEARTBEAT_SEGUNDOS = HEARTBEAT_HORAS * 60 * 60
 
-MIN_ESPERA = 20
-MAX_ESPERA = 30
+# Navegación
+TIMEOUT_PAGINA = 40
+ESPERA_RENDER_MIN = 2
+ESPERA_RENDER_MAX = 4
 
-# Heartbeat cada 5 horas
-HEARTBEAT_INTERVAL = 5 * 60 * 60
+# Alertas de disponibilidad
+COOLDOWN_DISPONIBILIDAD = 30
 
-# Tiempo máximo de carga
-TIMEOUT_CARGA = 40
-
-# Espera para contenido dinámico
-ESPERA_RENDER_MIN = 2.0
-ESPERA_RENDER_MAX = 4.0
-
-# Cooldown de alerta de disponibilidad
-COOLDOWN_ALERTA = 30
-
-# Máximo de errores consecutivos de Telegram
+# Telegram
 MAX_ERRORES_TELEGRAM = 10
 
-# Esperas cuando Ticketmaster realmente devuelve protección
-BLOQUEO_ESPERA_1 = 120
-BLOQUEO_ESPERA_2 = 300
-BLOQUEO_ESPERA_MAX = 600
+# Bloqueos
+ESPERA_BLOQUEO_1 = 120
+ESPERA_BLOQUEO_2 = 300
+ESPERA_BLOQUEO_3 = 600
 
 
 # ============================================================
-# 🧠 LOG
-# ============================================================
-
-def log(msg):
-
-    print(msg)
-    sys.stdout.flush()
-
-
-# ============================================================
-# ⏱️ TIEMPO ACTIVO
-# ============================================================
-
-inicio_bot = time.time()
-
-
-def obtener_tiempo_activo():
-
-    segundos = int(
-        time.time() - inicio_bot
-    )
-
-    dias = segundos // 86400
-
-    horas = (
-        segundos % 86400
-    ) // 3600
-
-    minutos = (
-        segundos % 3600
-    ) // 60
-
-    segundos_restantes = (
-        segundos % 60
-    )
-
-    if dias > 0:
-
-        return (
-            f"{dias}d "
-            f"{horas}h "
-            f"{minutos}m"
-        )
-
-    if horas > 0:
-
-        return (
-            f"{horas}h "
-            f"{minutos}m"
-        )
-
-    if minutos > 0:
-
-        return (
-            f"{minutos}m "
-            f"{segundos_restantes}s"
-        )
-
-    return (
-        f"{segundos_restantes}s"
-    )
-
-
-def obtener_horas_activas():
-
-    return (
-        time.time() - inicio_bot
-    ) / 3600
-
-
-# ============================================================
-# 📲 TELEGRAM
-# ============================================================
-
-errores_telegram = 0
-
-
-def send_telegram(
-    mensaje,
-    contar_error=True
-):
-
-    global errores_telegram
-
-    if not TOKEN:
-
-        log(
-            "❌ TOKEN no configurado"
-        )
-
-        return False
-
-    if not CHAT_ID:
-
-        log(
-            "❌ CHAT_ID no configurado"
-        )
-
-        return False
-
-    try:
-
-        respuesta = requests.post(
-            f"https://api.telegram.org/bot{TOKEN}/sendMessage",
-            data={
-                "chat_id": CHAT_ID,
-                "text": mensaje
-            },
-            timeout=10
-        )
-
-        if respuesta.status_code == 200:
-
-            errores_telegram = 0
-
-            return True
-
-        log(
-            f"⚠️ Telegram respondió "
-            f"{respuesta.status_code}"
-        )
-
-        if contar_error:
-
-            errores_telegram += 1
-
-            if (
-                errores_telegram
-                >= MAX_ERRORES_TELEGRAM
-            ):
-
-                log(
-                    "⚠️ Se alcanzó el límite "
-                    "de errores de Telegram."
-                )
-
-        return False
-
-    except Exception as e:
-
-        log(
-            f"❌ Error Telegram: "
-            f"{str(e)[:300]}"
-        )
-
-        if contar_error:
-
-            errores_telegram += 1
-
-        return False
-
-
-# ============================================================
-# 💓 HEARTBEAT
-# ============================================================
-
-ultima_heartbeat = time.time()
-
-
-def enviar_heartbeat():
-
-    agotados = sum(
-        1
-        for estado in ultimo_estado_valido.values()
-        if estado == "agotado"
-    )
-
-    disponibles = sum(
-        1
-        for estado in ultimo_estado_valido.values()
-        if estado == "disponible"
-    )
-
-    bloqueados = sum(
-        1
-        for estado in estado_actual.values()
-        if estado == "bloqueado"
-    )
-
-    mensaje = (
-        "💓 BOT SIGUE ACTIVO\n\n"
-
-        "✅ Railway ejecutando correctamente\n"
-        "🔎 Monitoreo de Ticketmaster activo\n"
-        "📡 Telegram conectado\n\n"
-
-        f"⏱️ Tiempo activo: "
-        f"{obtener_tiempo_activo()}\n"
-
-        f"🕐 Horas activas: "
-        f"{obtener_horas_activas():.2f} h\n\n"
-
-        f"🔁 Ciclos realizados: "
-        f"{estadisticas['ciclos']}\n"
-
-        f"❌ Detecciones AGOTADO: "
-        f"{estadisticas['agotado']}\n"
-
-        f"🚨 Detecciones DISPONIBLE: "
-        f"{estadisticas['disponible']}\n"
-
-        f"🛡️ Bloqueos detectados: "
-        f"{estadisticas['bloqueado']}\n"
-
-        f"❓ Desconocidos: "
-        f"{estadisticas['desconocido']}\n"
-
-        f"⚠️ Errores Selenium: "
-        f"{estadisticas['error']}\n\n"
-
-        f"📊 Estados válidos actuales:\n"
-
-        f"❌ Agotados: "
-        f"{agotados}\n"
-
-        f"🚨 Disponibles: "
-        f"{disponibles}\n"
-
-        f"🛡️ Bloqueados ahora: "
-        f"{bloqueados}"
-    )
-
-    if send_telegram(mensaje):
-
-        log(
-            "💓 Heartbeat enviado correctamente"
-        )
-
-    else:
-
-        log(
-            "⚠️ No se pudo enviar heartbeat"
-        )
-
-
-def comprobar_heartbeat():
-
-    global ultima_heartbeat
-
-    ahora = time.time()
-
-    if (
-        ahora - ultima_heartbeat
-        >= HEARTBEAT_INTERVAL
-    ):
-
-        enviar_heartbeat()
-
-        ultima_heartbeat = ahora
-
-
-# ============================================================
-# 🚨 ALERTA DE DISPONIBILIDAD
-# ============================================================
-
-def alerta_disponibilidad(url):
-
-    evento = EVENTOS.get(
-        url,
-        "EVENTO"
-    )
-
-    mensaje = (
-        "🚨🚨 TICKET DISPONIBLE 🚨🚨\n\n"
-
-        f"🎫 Evento: {evento}\n\n"
-
-        "⚡ Posible disponibilidad detectada.\n\n"
-
-        f"{url}\n\n"
-
-        "🔎 Revisa Ticketmaster inmediatamente."
-    )
-
-    send_telegram(mensaje)
-
-
-# ============================================================
-# 🛡️ ALERTA DE BLOQUEO
-# ============================================================
-
-bloqueo_notificado = {
-    url: False
-    for url in URLS
-}
-
-
-def notificar_bloqueo(url):
-
-    if bloqueo_notificado[url]:
-
-        return
-
-    evento = EVENTOS.get(
-        url,
-        "EVENTO"
-    )
-
-    mensaje = (
-        "🛡️ VERIFICACIÓN TEMPORALMENTE LIMITADA\n\n"
-
-        f"🎫 Evento: {evento}\n\n"
-
-        "Ticketmaster está mostrando una "
-        "página de protección en lugar del "
-        "contenido normal del evento.\n\n"
-
-        "⚠️ El bot conservará el último estado "
-        "válido de las entradas.\n\n"
-
-        "🔄 El monitoreo continuará automáticamente."
-    )
-
-    if send_telegram(mensaje):
-
-        bloqueo_notificado[url] = True
-
-        log(
-            f"🛡️ Bloqueo notificado: "
-            f"{evento}"
-        )
-
-
-# ============================================================
-# 🌐 CREAR CHROME
-# ============================================================
-
-def crear_driver():
-
-    options = Options()
-
-    options.binary_location = (
-        "/usr/bin/chromium"
-    )
-
-    options.add_argument(
-        "--headless=new"
-    )
-
-    options.add_argument(
-        "--no-sandbox"
-    )
-
-    options.add_argument(
-        "--disable-dev-shm-usage"
-    )
-
-    options.add_argument(
-        "--disable-gpu"
-    )
-
-    options.add_argument(
-        "--disable-software-rasterizer"
-    )
-
-    options.add_argument(
-        "--disable-extensions"
-    )
-
-    options.add_argument(
-        "--disable-background-networking"
-    )
-
-    options.add_argument(
-        "--disable-sync"
-    )
-
-    options.add_argument(
-        "--metrics-recording-only"
-    )
-
-    options.add_argument(
-        "--mute-audio"
-    )
-
-    options.add_argument(
-        "--disable-notifications"
-    )
-
-    options.add_argument(
-        "--disable-popup-blocking"
-    )
-
-    options.add_argument(
-        "--window-size=1365,900"
-    )
-
-    options.add_argument(
-        "--lang=es-CO"
-    )
-
-    options.add_argument(
-        "--disable-background-timer-throttling"
-    )
-
-    options.add_argument(
-        "--disable-backgrounding-occluded-windows"
-    )
-
-    options.add_argument(
-        "--disable-renderer-backgrounding"
-    )
-
-    options.add_argument(
-        "--user-agent=Mozilla/5.0 "
-        "(X11; Linux x86_64) "
-        "AppleWebKit/537.36 "
-        "(KHTML, like Gecko) "
-        "Chrome/147.0.0.0 Safari/537.36"
-    )
-
-    options.page_load_strategy = (
-        "eager"
-    )
-
-    service = Service(
-        "/usr/bin/chromedriver"
-    )
-
-    nuevo_driver = webdriver.Chrome(
-        service=service,
-        options=options
-    )
-
-    nuevo_driver.set_page_load_timeout(
-        TIMEOUT_CARGA
-    )
-
-    return nuevo_driver
-
-
-# ============================================================
-# 🚀 DRIVER GLOBAL
+# ESTADO GLOBAL
 # ============================================================
 
 driver = None
 
-
-def iniciar_driver(
-    notificar=False
-):
-
-    global driver
-
-    # --------------------------------------------------------
-    # Cerrar driver anterior
-    # --------------------------------------------------------
-
-    try:
-
-        if driver:
-
-            try:
-                driver.quit()
-            except Exception:
-                pass
-
-    except Exception:
-        pass
-
-    driver = None
-
-    # --------------------------------------------------------
-    # Crear nuevo driver
-    # --------------------------------------------------------
-
-    try:
-
-        driver = crear_driver()
-
-        driver.get(
-            "https://www.ticketmaster.co"
-        )
-
-        time.sleep(2)
-
-        log(
-            "✅ Chrome iniciado correctamente"
-        )
-
-        # ====================================================
-        # IMPORTANTE
-        # ====================================================
-        #
-        # La recuperación de Chrome es SILENCIOSA.
-        #
-        # Aunque se llame iniciar_driver()
-        # nuevamente después de un error:
-        #
-        # ❌ NO manda "BOT ACTIVO"
-        # ❌ NO manda "BOT INICIANDO"
-        # ❌ NO manda mensajes consecutivos
-        #
-        # El único mensaje de inicio se manda
-        # una sola vez al comenzar el programa.
-        # ====================================================
-
-        if notificar:
-
-            send_telegram(
-                "🚀 BOT ACTIVO\n\n"
-                "✅ Chrome iniciado correctamente\n"
-                "🔎 Monitoreo iniciado\n"
-                "📡 Telegram conectado"
-            )
-
-        return True
-
-    except Exception as e:
-
-        log(
-            f"❌ Error iniciando Chrome: "
-            f"{str(e)[:400]}"
-        )
-
-        # ----------------------------------------------------
-        # IMPORTANTE:
-        #
-        # El error de recuperación NO manda un nuevo
-        # mensaje de BOT ACTIVO.
-        # ----------------------------------------------------
-
-        return False
-
-
-# ============================================================
-# 🧠 ESTADOS
-# ============================================================
+inicio_bot = time.time()
+ultimo_heartbeat = time.time()
 
 ultimo_estado_valido = {
-    url: None
-    for url in URLS
+    url: None for url in URLS
 }
-
 
 estado_actual = {
-    url: None
-    for url in URLS
+    url: None for url in URLS
 }
-
 
 ultima_alerta = {
-    url: 0
-    for url in URLS
+    url: 0 for url in URLS
 }
-
 
 racha_bloqueos = {
-    url: 0
-    for url in URLS
+    url: 0 for url in URLS
 }
-
-
-# ============================================================
-# 📊 ESTADÍSTICAS
-# ============================================================
 
 estadisticas = {
-
     "ciclos": 0,
-
     "agotado": 0,
-
     "disponible": 0,
-
     "bloqueado": 0,
-
     "desconocido": 0,
-
-    "error": 0
+    "errores": 0,
+    "recuperaciones_chrome": 0,
+    "alertas_disponibilidad": 0,
 }
 
+errores_telegram = 0
+
+lock = threading.Lock()
+
 
 # ============================================================
-# 🧹 NORMALIZAR TEXTO
+# UTILIDADES
 # ============================================================
+
+def ahora():
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def tiempo_activo():
+    segundos = int(time.time() - inicio_bot)
+
+    dias = segundos // 86400
+    segundos %= 86400
+
+    horas = segundos // 3600
+    segundos %= 3600
+
+    minutos = segundos // 60
+    segundos %= 60
+
+    if dias > 0:
+        return f"{dias}d {horas}h {minutos}m"
+
+    return f"{horas}h {minutos}m {segundos}s"
+
+
+def horas_activas():
+    return (time.time() - inicio_bot) / 3600
+
 
 def normalizar_texto(texto):
-
     if not texto:
-
         return ""
 
     texto = texto.lower()
 
     reemplazos = {
-
         "á": "a",
         "é": "e",
         "í": "i",
         "ó": "o",
         "ú": "u",
-        "ü": "u"
+        "ü": "u",
+        "ñ": "n",
     }
 
-    for original, nuevo in reemplazos.items():
+    for original, reemplazo in reemplazos.items():
+        texto = texto.replace(original, reemplazo)
 
-        texto = texto.replace(
-            original,
-            nuevo
-        )
-
-    texto = re.sub(
-        r"\s+",
-        " ",
-        texto
-    )
+    texto = re.sub(r"\s+", " ", texto)
 
     return texto.strip()
 
 
+def texto_visible(driver):
+    try:
+        body = driver.find_element(By.TAG_NAME, "body")
+        return body.text or ""
+    except Exception:
+        return ""
+
+
 # ============================================================
-# 🛡️ DETECCIÓN DE PROTECCIÓN
+# TELEGRAM
 # ============================================================
 
-def detectar_proteccion(
-    texto_visible
-):
+def enviar_telegram(mensaje):
+    global errores_telegram
 
-    texto = normalizar_texto(
-        texto_visible
-    )
+    if not TOKEN or not CHAT_ID:
+        print("Telegram no configurado: faltan TOKEN o CHAT_ID.")
+        return False
 
-    if not texto:
+    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+
+    datos = {
+        "chat_id": CHAT_ID,
+        "text": mensaje,
+        "disable_web_page_preview": True,
+    }
+
+    try:
+        respuesta = requests.post(
+            url,
+            data=datos,
+            timeout=15
+        )
+
+        if respuesta.ok:
+            errores_telegram = 0
+            return True
+
+        errores_telegram += 1
+
+        if errores_telegram <= MAX_ERRORES_TELEGRAM:
+            print(
+                f"Error Telegram #{errores_telegram}: "
+                f"{respuesta.status_code} {respuesta.text[:300]}"
+            )
 
         return False
 
-    frases_fuertes = [
+    except Exception as e:
+        errores_telegram += 1
 
-        "your browsing activity has been paused",
+        if errores_telegram <= MAX_ERRORES_TELEGRAM:
+            print(
+                f"Error Telegram #{errores_telegram}: {e}"
+            )
 
-        "we've detected unusual behavior",
+        return False
 
-        "we have detected unusual behavior",
 
-        "unusual behavior on either your network or your browser",
+# ============================================================
+# MENSAJE INICIAL
+# ============================================================
 
-        "browsing activity has been paused",
-
-        "change your wi-fi or cellular network",
-
-        "change your wifi or cellular network",
-
-        "switch devices or move to a different location",
-
-        "hemos detectado actividad inusual",
-
-        "hemos detectado un comportamiento inusual",
-
-        "actividad inusual en tu red",
-
-        "comportamiento inusual"
-    ]
-
-    for frase in frases_fuertes:
-
-        if frase in texto:
-
-            return True
-
-    tiene_unusual = (
-        "unusual behavior" in texto
-        or
-        "unusual activity" in texto
-        or
-        "actividad inusual" in texto
+def mensaje_inicio():
+    mensaje = (
+        "🚀 BOT INICIANDO\n\n"
+        "✅ Railway conectado\n"
+        "📡 Telegram conectado\n"
+        "🔎 Preparando monitoreo...\n\n"
+        f"🎫 Eventos configurados: {len(URLS)}"
     )
 
-    tiene_navegacion = (
-        "browser" in texto
-        or
-        "browsing" in texto
-        or
-        "navegador" in texto
-        or
-        "red" in texto
+    enviar_telegram(mensaje)
+
+
+# ============================================================
+# HEARTBEAT
+# ============================================================
+
+def enviar_heartbeat():
+    global ultimo_heartbeat
+
+    if time.time() - ultimo_heartbeat < HEARTBEAT_SEGUNDOS:
+        return
+
+    ultimo_heartbeat = time.time()
+
+    mensaje = (
+        "💓 HEARTBEAT DEL BOT\n\n"
+        "🟢 Railway: funcionando\n"
+        "📡 Telegram: conectado\n"
+        "🎫 Ticketmaster: monitoreando\n\n"
+        f"⏱️ Tiempo activo: {tiempo_activo()}\n"
+        f"🕐 Horas activo: {horas_activas():.2f} h\n\n"
+        f"🔄 Ciclos: {estadisticas['ciclos']}\n"
+        f"🔴 Agotado: {estadisticas['agotado']}\n"
+        f"🟢 Disponible: {estadisticas['disponible']}\n"
+        f"🛡️ Bloqueos: {estadisticas['bloqueado']}\n"
+        f"❔ Desconocidos: {estadisticas['desconocido']}\n"
+        f"⚠️ Errores: {estadisticas['errores']}\n"
+        f"🔧 Recuperaciones Chrome: {estadisticas['recuperaciones_chrome']}\n"
+        f"🚨 Alertas disponibilidad: {estadisticas['alertas_disponibilidad']}"
     )
+
+    enviar_telegram(mensaje)
+
+
+# ============================================================
+# ALERTA DE DISPONIBILIDAD
+# ============================================================
+
+def alertar_disponibilidad(url, motivo):
+    ahora_timestamp = time.time()
 
     if (
-        tiene_unusual
-        and
-        tiene_navegacion
+        ahora_timestamp - ultima_alerta[url]
+        < COOLDOWN_DISPONIBILIDAD
     ):
+        return
+
+    ultima_alerta[url] = ahora_timestamp
+    estadisticas["alertas_disponibilidad"] += 1
+
+    evento = EVENTOS.get(url, "EVENTO DESCONOCIDO")
+
+    mensaje = (
+        "🚨🚨🚨 BOLETAS DISPONIBLES 🚨🚨🚨\n\n"
+        f"🎤 BTS WORLD TOUR\n"
+        f"📅 {evento}\n\n"
+        f"🟢 Señal detectada: {motivo}\n\n"
+        f"🎟️ ENTRA AHORA:\n"
+        f"{url}"
+    )
+
+    enviar_telegram(mensaje)
+
+    print(
+        f"[{ahora()}] 🚨 DISPONIBILIDAD DETECTADA "
+        f"({evento}) -> {motivo}"
+    )
+
+
+# ============================================================
+# ALERTA DE BLOQUEO
+# ============================================================
+
+def alertar_bloqueo(url):
+    if racha_bloqueos[url] != 1:
+        return
+
+    evento = EVENTOS.get(url, "EVENTO DESCONOCIDO")
+
+    mensaje = (
+        "🛡️ PROTECCIÓN / BLOQUEO DETECTADO\n\n"
+        f"🎤 BTS WORLD TOUR\n"
+        f"📅 {evento}\n\n"
+        "⚠️ Ticketmaster está mostrando una señal "
+        "de protección o verificación.\n\n"
+        "🔄 El bot conservará el último estado válido "
+        "y continuará intentando posteriormente."
+    )
+
+    enviar_telegram(mensaje)
+
+
+# ============================================================
+# SELENIUM / CHROME
+# ============================================================
+
+def cerrar_driver():
+    global driver
+
+    if driver is not None:
+        try:
+            driver.quit()
+        except Exception:
+            pass
+
+    driver = None
+
+
+def iniciar_driver(notificar=False):
+    global driver
+
+    cerrar_driver()
+
+    opciones = Options()
+
+    opciones.binary_location = "/usr/bin/chromium"
+
+    opciones.add_argument("--headless=new")
+    opciones.add_argument("--no-sandbox")
+    opciones.add_argument("--disable-dev-shm-usage")
+    opciones.add_argument("--disable-gpu")
+    opciones.add_argument("--disable-software-rasterizer")
+    opciones.add_argument("--disable-background-networking")
+    opciones.add_argument("--disable-background-timer-throttling")
+    opciones.add_argument("--disable-backgrounding-occluded-windows")
+    opciones.add_argument("--disable-breakpad")
+    opciones.add_argument("--disable-component-extensions-with-background-pages")
+    opciones.add_argument("--disable-features=Translate,BackForwardCache")
+    opciones.add_argument("--disable-hang-monitor")
+    opciones.add_argument("--disable-ipc-flooding-protection")
+    opciones.add_argument("--disable-popup-blocking")
+    opciones.add_argument("--disable-prompt-on-repost")
+    opciones.add_argument("--disable-renderer-backgrounding")
+    opciones.add_argument("--disable-sync")
+    opciones.add_argument("--metrics-recording-only")
+    opciones.add_argument("--no-first-run")
+    opciones.add_argument("--no-default-browser-check")
+    opciones.add_argument("--password-store=basic")
+    opciones.add_argument("--use-mock-keychain")
+    opciones.add_argument("--window-size=1920,1080")
+
+    opciones.add_argument(
+        "--user-agent=Mozilla/5.0 "
+        "(X11; Linux x86_64) "
+        "AppleWebKit/537.36 "
+        "(KHTML, like Gecko) "
+        "Chrome/131.0.0.0 Safari/537.36"
+    )
+
+    opciones.page_load_strategy = "eager"
+
+    try:
+        driver = webdriver.Chrome(
+            service=webdriver.ChromeService(
+                executable_path="/usr/bin/chromedriver"
+            ),
+            options=opciones
+        )
+
+        driver.set_page_load_timeout(TIMEOUT_PAGINA)
+
+        print(f"[{ahora()}] Chrome iniciado correctamente.")
+
+        if notificar:
+            enviar_telegram(
+                "🚀 BOT ACTIVO\n\n"
+                "Chrome iniciado correctamente."
+            )
 
         return True
 
-    return False
+    except Exception as e:
+        driver = None
+
+        print(
+            f"[{ahora()}] ❌ No se pudo iniciar Chrome: {e}"
+        )
+
+        return False
 
 
 # ============================================================
-# 🎫 PALABRAS AGOTADO
+# DETECCIÓN DE PROTECCIÓN
 # ============================================================
 
-PALABRAS_AGOTADO = [
+def detectar_proteccion(texto):
+    texto = normalizar_texto(texto)
 
-    "entradas agotadas",
+    if not texto:
+        return False
 
-    "entrada agotada",
+    frases_fuertes = [
+        "verifica que eres humano",
+        "verify you are human",
+        "verifying you are human",
+        "checking your browser",
+        "checking your connection",
+        "just a moment",
+        "access denied",
+        "too many requests",
+        "unusual traffic",
+        "security check",
+        "security verification",
+        "please wait while we verify",
+        "please wait while we check",
+        "ray id",
+        "cloudflare",
+        "captcha",
+        "recaptcha",
+        "are you a robot",
+        "eres un robot",
+        "actividad inusual",
+        "actividad sospechosa",
+        "proteccion contra bots",
+    ]
 
-    "boletas agotadas",
+    for frase in frases_fuertes:
+        if frase in texto:
+            return True
 
-    "boleta agotada",
+    combinaciones = [
+        ("verifica", "humano"),
+        ("verify", "human"),
+        ("security", "check"),
+        ("security", "verification"),
+        ("please wait", "browser"),
+        ("checking", "browser"),
+        ("unusual", "traffic"),
+        ("access", "denied"),
+    ]
 
-    "tickets agotados",
-
-    "ticket agotado",
-
-    "agotado",
-
-    "agotados",
-
-    "sold out",
-
-    "soldout",
-
-    "no hay entradas",
-
-    "no hay boletas",
-
-    "no hay tickets",
-
-    "no tickets available",
-
-    "tickets are currently unavailable",
-
-    "currently unavailable",
-
-    "entradas no disponibles",
-
-    "boletas no disponibles",
-
-    "tickets no disponibles",
-
-    "tickets unavailable",
-
-    "entradas agotadas para este evento"
-]
-
-
-# ============================================================
-# 🚨 PALABRAS DISPONIBLE
-# ============================================================
-
-PALABRAS_DISPONIBLE = [
-
-    "entradas disponibles",
-
-    "boletas disponibles",
-
-    "tickets disponibles",
-
-    "asientos disponibles",
-
-    "seleccionar entradas",
-
-    "seleccionar boletas",
-
-    "seleccionar tickets",
-
-    "select tickets",
-
-    "select seats",
-
-    "ver entradas",
-
-    "ver boletas",
-
-    "ver tickets",
-
-    "ver asientos",
-
-    "comprar entradas",
-
-    "comprar boletas",
-
-    "comprar tickets",
-
-    "comprar asientos",
-
-    "buy tickets",
-
-    "available tickets",
-
-    "tickets available",
-
-    "available seats"
-]
-
-
-# ============================================================
-# 🔍 CONTIENE PALABRA
-# ============================================================
-
-def contiene_alguna(
-    texto,
-    palabras
-):
-
-    for palabra in palabras:
-
-        if palabra in texto:
-
+    for palabra1, palabra2 in combinaciones:
+        if palabra1 in texto and palabra2 in texto:
             return True
 
     return False
 
 
 # ============================================================
-# 🎯 COMPROBAR PÁGINA DEL EVENTO
+# PALABRAS DE ESTADO
 # ============================================================
 
-def parece_pagina_evento(
-    texto_visible,
-    html
-):
+PALABRAS_AGOTADO = [
+    "agotado",
+    "agotada",
+    "sold out",
+    "soldout",
+    "currently unavailable",
+    "currently not available",
+    "no disponible",
+    "entradas agotadas",
+    "boletas agotadas",
+    "sin disponibilidad",
+    "no hay disponibilidad",
+    "unavailable",
+]
 
-    texto = normalizar_texto(
-        texto_visible
-    )
-
-    html_normalizado = normalizar_texto(
-        html
-    )
-
-    señales = 0
-
-    if "bts" in texto:
-
-        señales += 1
-
-    elif "bts" in html_normalizado:
-
-        señales += 1
-
-    if "ticketmaster" in texto:
-
-        señales += 1
-
-    elif "ticketmaster" in html_normalizado:
-
-        señales += 1
-
-    if "venta general" in texto:
-
-        señales += 1
-
-    if (
-        "octubre" in texto
-        or
-        "oct" in texto
-    ):
-
-        señales += 1
-
-    if (
-        "campin" in texto
-        or
-        "campín" in texto
-    ):
-
-        señales += 1
-
-    return señales >= 2
+PALABRAS_DISPONIBLE = [
+    "disponible",
+    "disponibles",
+    "available",
+    "availability",
+    "hay entradas",
+    "hay boletas",
+    "entradas disponibles",
+    "boletas disponibles",
+]
 
 
 # ============================================================
-# 🚨 DETECTOR PRIORITARIO DE BOTÓN DISPONIBLE
-# ============================================================
-#
-# Esta función busca específicamente elementos que parezcan
-# botones reales de compra/selección.
-#
-# Es PRIORITARIA frente a las señales genéricas de texto.
-#
-# Además comprueba:
-#
-# - que sea visible
-# - que esté habilitado
-# - que tenga texto relacionado con compra/selección
-#
-# Esto evita tomar cualquier aparición de la palabra
-# "ticket" dentro de un elemento irrelevante como disponibilidad.
+# DETECCIÓN DE PÁGINA DEL EVENTO
 # ============================================================
 
-def detectar_boton_disponible_prioritario():
+def parece_pagina_evento(texto, html):
+    texto_n = normalizar_texto(texto)
+    html_n = normalizar_texto(html)
 
-    try:
-
-        elementos = driver.find_elements(
-            By.CSS_SELECTOR,
-            "button, a, [role='button']"
-        )
-
-    except Exception:
-
-        return False
-
-    textos_prioritarios = [
-
-        "comprar",
-
-        "comprar entradas",
-
-        "comprar boletas",
-
-        "comprar tickets",
-
-        "seleccionar",
-
-        "seleccionar entradas",
-
-        "seleccionar boletas",
-
-        "seleccionar tickets",
-
-        "seleccionar asientos",
-
-        "select tickets",
-
-        "select seats",
-
-        "buy tickets",
-
-        "ver entradas",
-
-        "ver boletas",
-
-        "ver tickets",
-
-        "ver asientos"
+    senales = [
+        "bts",
+        "ticketmaster",
+        "venta general",
+        "octubre",
+        "campin",
+        "world tour",
     ]
 
-    for elemento in elementos:
+    contador = 0
 
+    for senal in senales:
+        if senal in texto_n or senal in html_n:
+            contador += 1
+
+    return contador >= 2
+
+
+# ============================================================
+# DETECCIÓN DE AGOTADO EN TEXTO VISIBLE
+# ============================================================
+
+def detectar_agotado_texto(texto):
+    texto_n = normalizar_texto(texto)
+
+    for palabra in PALABRAS_AGOTADO:
+        if palabra in texto_n:
+            return True
+
+    return False
+
+
+# ============================================================
+# DETECCIÓN DE AGOTADO EN HTML
+# ============================================================
+
+def detectar_agotado_html(html):
+    html_n = normalizar_texto(html)
+
+    for palabra in PALABRAS_AGOTADO:
+        if palabra in html_n:
+            return True
+
+    return False
+
+
+# ============================================================
+# DETECTOR PRIORITARIO DEL BOTÓN DE COMPRA
+# ============================================================
+
+def detectar_boton_disponible_prioritario(driver):
+    selectores = [
+        "button",
+        "a",
+        "[role='button']",
+    ]
+
+    textos_fuertes = [
+        "comprar",
+        "compra",
+        "comprar entradas",
+        "comprar boletas",
+        "seleccionar",
+        "seleccionar entradas",
+        "seleccionar asientos",
+        "ver entradas",
+        "ver boletas",
+        "entradas",
+        "boletas",
+        "tickets",
+        "buy tickets",
+        "buy",
+        "select seats",
+        "select tickets",
+        "get tickets",
+    ]
+
+    atributos_fuertes = [
+        "aria-label",
+        "title",
+        "data-testid",
+        "data-test",
+    ]
+
+    for selector in selectores:
         try:
+            elementos = driver.find_elements(
+                By.CSS_SELECTOR,
+                selector
+            )
+        except Exception:
+            continue
 
-            if not elemento.is_displayed():
-
+        for elemento in elementos:
+            try:
+                if not elemento.is_displayed():
+                    continue
+            except Exception:
                 continue
 
             try:
-
                 if not elemento.is_enabled():
-
                     continue
-
             except Exception:
-
                 pass
 
-            texto = normalizar_texto(
-                elemento.text
+            valores = []
+
+            try:
+                valores.append(elemento.text or "")
+            except Exception:
+                pass
+
+            for atributo in atributos_fuertes:
+                try:
+                    valores.append(
+                        elemento.get_attribute(atributo) or ""
+                    )
+                except Exception:
+                    pass
+
+            contenido = normalizar_texto(
+                " ".join(valores)
             )
 
-            if not texto:
-
+            if not contenido:
                 continue
 
-            # ------------------------------------------------
-            # Coincidencia directa con textos fuertes
-            # ------------------------------------------------
+            for palabra in textos_fuertes:
+                if palabra in contenido:
+                    return True, palabra
 
-            for palabra in textos_prioritarios:
+    return False, None
 
-                if texto == palabra:
 
-                    log(
-                        f"🚨 Botón prioritario detectado: "
-                        f"'{texto}'"
-                    )
+# ============================================================
+# DETECCIÓN GENÉRICA DE BOTONES
+# ============================================================
 
+def detectar_botones_compra(driver):
+    palabras = [
+        "comprar",
+        "compra",
+        "entradas",
+        "boletas",
+        "tickets",
+        "buy",
+        "select",
+        "seleccionar",
+        "reservar",
+    ]
+
+    selectores = [
+        "button",
+        "a",
+        "[role='button']",
+    ]
+
+    for selector in selectores:
+        try:
+            elementos = driver.find_elements(
+                By.CSS_SELECTOR,
+                selector
+            )
+        except Exception:
+            continue
+
+        for elemento in elementos:
+            try:
+                if not elemento.is_displayed():
+                    continue
+            except Exception:
+                continue
+
+            try:
+                texto = elemento.text or ""
+            except Exception:
+                texto = ""
+
+            texto = normalizar_texto(texto)
+
+            for palabra in palabras:
+                if palabra in texto:
                     return True
 
-            # ------------------------------------------------
-            # Coincidencia parcial para frases más largas
-            # ------------------------------------------------
-
-            if (
-                "comprar" in texto
-                and
-                (
-                    "entrada" in texto
-                    or
-                    "boleta" in texto
-                    or
-                    "ticket" in texto
-                )
-            ):
-
-                log(
-                    f"🚨 Botón de compra detectado: "
-                    f"'{texto[:120]}'"
-                )
-
-                return True
-
-            if (
-                "seleccionar" in texto
-                and
-                (
-                    "entrada" in texto
-                    or
-                    "boleta" in texto
-                    or
-                    "ticket" in texto
-                    or
-                    "asiento" in texto
-                )
-            ):
-
-                log(
-                    f"🚨 Botón de selección detectado: "
-                    f"'{texto[:120]}'"
-                )
-
-                return True
-
-            if (
-                "select" in texto
-                and
-                (
-                    "ticket" in texto
-                    or
-                    "seat" in texto
-                )
-            ):
-
-                log(
-                    f"🚨 Botón de selección detectado: "
-                    f"'{texto[:120]}'"
-                )
-
-                return True
-
-            if (
-                "ver entradas" in texto
-                or
-                "ver boletas" in texto
-                or
-                "ver tickets" in texto
-            ):
-
-                log(
-                    f"🚨 Botón para ver entradas detectado: "
-                    f"'{texto[:120]}'"
-                )
-
-                return True
-
-        except Exception:
-
-            continue
-
     return False
 
 
 # ============================================================
-# 🔎 DETECCIÓN GENERAL DE BOTONES
+# DETECCIÓN DE ENLACES DE COMPRA
 # ============================================================
 
-def detectar_botones_compra():
-
-    try:
-
-        elementos = driver.find_elements(
-            By.CSS_SELECTOR,
-            "button, a, [role='button']"
-        )
-
-    except Exception:
-
-        return False
-
-    palabras = [
-
-        "comprar",
-
+def detectar_enlaces_compra(driver):
+    palabras_href = [
+        "checkout",
+        "purchase",
         "buy",
-
+        "ticket",
+        "tickets",
         "entradas",
-
-        "entrada",
-
         "boletas",
-
-        "boleta",
-
         "select",
-
-        "seleccionar",
-
-        "ver entradas",
-
-        "ver boletas",
-
-        "ver tickets"
+        "seat",
+        "seats",
     ]
 
-    for elemento in elementos:
-
-        try:
-
-            if not elemento.is_displayed():
-
-                continue
-
-            texto = normalizar_texto(
-                elemento.text
-            )
-
-            if not texto:
-
-                continue
-
-            if contiene_alguna(
-                texto,
-                palabras
-            ):
-
-                return True
-
-        except Exception:
-
-            continue
-
-    return False
-
-
-# ============================================================
-# 🔗 ENLACES DE COMPRA
-# ============================================================
-
-def detectar_enlaces_compra():
-
     try:
-
         enlaces = driver.find_elements(
             By.CSS_SELECTOR,
-            "a"
+            "a[href]"
         )
-
     except Exception:
-
         return False
 
-    palabras = [
-
-        "checkout",
-
-        "purchase",
-
-        "buy",
-
-        "ticket",
-
-        "tickets"
-    ]
-
     for enlace in enlaces:
+        try:
+            if not enlace.is_displayed():
+                continue
+        except Exception:
+            continue
 
         try:
-
-            if not enlace.is_displayed():
-
-                continue
-
-            href = enlace.get_attribute(
-                "href"
-            )
-
-            if not href:
-
-                continue
-
-            href = normalizar_texto(
-                href
-            )
-
-            if contiene_alguna(
-                href,
-                palabras
-            ):
-
-                return True
-
+            href = enlace.get_attribute("href") or ""
         except Exception:
+            href = ""
 
-            continue
+        href = normalizar_texto(href)
+
+        for palabra in palabras_href:
+            if palabra in href:
+                return True
 
     return False
 
 
 # ============================================================
-# 🔍 DETECCIÓN PRINCIPAL
+# DETECCIÓN PRINCIPAL DE DISPONIBILIDAD
 # ============================================================
 
-def detectar_disponibilidad(
-    url
-):
-
+def detectar_disponibilidad(url):
     global driver
 
+    if driver is None:
+        if not iniciar_driver(notificar=False):
+            return "error", "No se pudo iniciar Chrome"
+
     try:
-
-        # ----------------------------------------------------
-        # Comprobar driver
-        # ----------------------------------------------------
-
-        if driver is None:
-
-            log(
-                "⚠️ Driver inexistente."
-            )
-
-            if not iniciar_driver(
-                notificar=False
-            ):
-
-                return "error"
-
-        # ----------------------------------------------------
-        # Cargar página
-        # ----------------------------------------------------
-
-        log(
-            f"🌐 Consultando: "
+        print(
+            f"[{ahora()}] Consultando: "
             f"{EVENTOS.get(url, url)}"
         )
 
         driver.get(url)
 
-        time.sleep(
-            random.uniform(
-                ESPERA_RENDER_MIN,
-                ESPERA_RENDER_MAX
-            )
+        espera = random.uniform(
+            ESPERA_RENDER_MIN,
+            ESPERA_RENDER_MAX
+        )
+
+        time.sleep(espera)
+
+        html = driver.page_source or ""
+        visible = texto_visible(driver)
+
+        print(
+            f"[{ahora()}] Texto visible extraído: "
+            f"{len(visible)} caracteres"
         )
 
         # ----------------------------------------------------
-        # Obtener HTML
+        # 1. PROTECCIÓN
         # ----------------------------------------------------
 
-        try:
-
-            page_source = (
-                driver.page_source
-                or ""
-            )
-
-        except Exception:
-
-            page_source = ""
-
-        # ----------------------------------------------------
-        # Obtener texto visible
-        # ----------------------------------------------------
-
-        try:
-
-            body = driver.find_element(
-                By.TAG_NAME,
-                "body"
+        if detectar_proteccion(visible):
+            print(
+                f"[{ahora()}] 🛡️ Protección detectada."
             )
 
-            texto_visible = (
-                body.text
-                or ""
+            return "bloqueado", "Protección Ticketmaster"
+
+        # ----------------------------------------------------
+        # 2. AGOTADO EN TEXTO VISIBLE
+        # ----------------------------------------------------
+
+        if detectar_agotado_texto(visible):
+            print(
+                f"[{ahora()}] 🔴 AGOTADO detectado "
+                f"en texto visible."
             )
 
-        except Exception:
-
-            texto_visible = ""
+            return "agotado", "Texto visible: AGOTADO"
 
         # ----------------------------------------------------
-        # Normalizar
+        # 3. VERIFICAR SI PARECE EVENTO
         # ----------------------------------------------------
-
-        texto = normalizar_texto(
-            texto_visible
-        )
-
-        html = normalizar_texto(
-            page_source
-        )
-
-        # ----------------------------------------------------
-        # Información básica
-        # ----------------------------------------------------
-
-        try:
-
-            titulo = driver.title or ""
-
-        except Exception:
-
-            titulo = ""
-
-        log(
-            f"📄 {EVENTOS.get(url, url)}"
-        )
-
-        log(
-            f"   Texto visible: "
-            f"{len(texto_visible)} caracteres"
-        )
-
-        log(
-            f"   HTML: "
-            f"{len(page_source)} caracteres"
-        )
-
-        log(
-            f"   Título: "
-            f"{titulo[:150]}"
-        )
-
-        # ====================================================
-        # 🛡️ PROTECCIÓN
-        # ====================================================
-
-        if detectar_proteccion(
-            texto
-        ):
-
-            log(
-                "🛡️ Protección detectada "
-                "en texto visible"
-            )
-
-            return "bloqueado"
-
-        # ====================================================
-        # ❌ AGOTADO — TEXTO VISIBLE
-        # ====================================================
-
-        if contiene_alguna(
-            texto,
-            PALABRAS_AGOTADO
-        ):
-
-            log(
-                "❌ AGOTADO detectado "
-                "en texto visible"
-            )
-
-            return "agotado"
-
-        # ====================================================
-        # 🎫 PÁGINA DEL EVENTO
-        # ====================================================
 
         es_evento = parece_pagina_evento(
-            texto,
+            visible,
             html
         )
 
-        log(
-            f"   Página de evento: "
-            f"{'SÍ' if es_evento else 'NO'}"
-        )
-
-        # ====================================================
-        # ❌ AGOTADO — HTML
-        # ====================================================
+        # ----------------------------------------------------
+        # 4. AGOTADO EN HTML
+        # ----------------------------------------------------
 
         if es_evento:
-
-            if contiene_alguna(
-                html,
-                PALABRAS_AGOTADO
-            ):
-
-                log(
-                    "❌ AGOTADO detectado "
-                    "en HTML de página de evento"
+            if detectar_agotado_html(html):
+                print(
+                    f"[{ahora()}] 🔴 AGOTADO detectado "
+                    f"en HTML de página de evento."
                 )
 
-                return "agotado"
+                return "agotado", "HTML: AGOTADO"
 
-        # ====================================================
-        # 🚨 DISPONIBLE — BOTÓN PRIORITARIO
-        # ====================================================
-        #
-        # IMPORTANTE:
-        #
-        # Esta comprobación se hace ANTES de las señales
-        # genéricas de disponibilidad.
-        #
-        # Si Ticketmaster muestra un botón real de compra/
-        # selección, esta señal tiene prioridad.
-        # ====================================================
+        # ----------------------------------------------------
+        # 5. BOTÓN DE COMPRA PRIORITARIO
+        # ----------------------------------------------------
 
-        if detectar_boton_disponible_prioritario():
-
-            log(
-                "🚨 DISPONIBLE confirmado "
-                "mediante botón prioritario"
-            )
-
-            return "disponible"
-
-        # ====================================================
-        # 🚨 DISPONIBLE — TEXTO
-        # ====================================================
-
-        if contiene_alguna(
-            texto,
-            PALABRAS_DISPONIBLE
-        ):
-
-            log(
-                "🚨 DISPONIBLE detectado "
-                "en texto visible"
-            )
-
-            return "disponible"
-
-        # ====================================================
-        # 🚨 DISPONIBLE — BOTONES GENERALES
-        # ====================================================
-
-        if detectar_botones_compra():
-
-            log(
-                "🚨 DISPONIBLE detectado "
-                "mediante botón/enlace"
-            )
-
-            return "disponible"
-
-        # ====================================================
-        # 🚨 DISPONIBLE — ENLACES
-        # ====================================================
-
-        if detectar_enlaces_compra():
-
-            log(
-                "🚨 DISPONIBLE detectado "
-                "mediante enlace de compra"
-            )
-
-            return "disponible"
-
-        # ====================================================
-        # ❓ DESCONOCIDO
-        # ====================================================
-
-        log(
-            "❓ No se encontró una señal "
-            "clara de disponibilidad "
-            "o agotamiento"
+        boton_disponible, motivo_boton = (
+            detectar_boton_disponible_prioritario(driver)
         )
 
-        return "desconocido"
+        if boton_disponible:
+            print(
+                f"[{ahora()}] 🟢 BOTÓN DE COMPRA DETECTADO: "
+                f"{motivo_boton}"
+            )
 
-    # ========================================================
-    # 💥 ERROR
-    # ========================================================
+            return (
+                "disponible",
+                f"Botón accionable: {motivo_boton}"
+            )
 
-    except Exception as e:
+        # ----------------------------------------------------
+        # 6. TEXTO DE DISPONIBILIDAD
+        # ----------------------------------------------------
 
-        mensaje = str(e)
-
-        log(
-            f"⚠️ Error detectar: "
-            f"{mensaje[:500]}"
+        visible_normalizado = normalizar_texto(
+            visible
         )
 
-        estadisticas["error"] += 1
+        for palabra in PALABRAS_DISPONIBLE:
+            if palabra in visible_normalizado:
+                print(
+                    f"[{ahora()}] 🟢 Disponibilidad "
+                    f"detectada por texto: {palabra}"
+                )
 
-        mensaje_lower = (
-            mensaje.lower()
+                return (
+                    "disponible",
+                    f"Texto visible: {palabra}"
+                )
+
+        # ----------------------------------------------------
+        # 7. BOTONES GENÉRICOS
+        # ----------------------------------------------------
+
+        if detectar_botones_compra(driver):
+            print(
+                f"[{ahora()}] 🟢 Posible botón de compra."
+            )
+
+            return (
+                "disponible",
+                "Botón de compra detectado"
+            )
+
+        # ----------------------------------------------------
+        # 8. ENLACES DE COMPRA
+        # ----------------------------------------------------
+
+        if detectar_enlaces_compra(driver):
+            print(
+                f"[{ahora()}] 🟢 Posible enlace de compra."
+            )
+
+            return (
+                "disponible",
+                "Enlace de compra detectado"
+            )
+
+        # ----------------------------------------------------
+        # 9. DESCONOCIDO
+        # ----------------------------------------------------
+
+        print(
+            f"[{ahora()}] ❔ No se encontró señal clara."
+        )
+
+        return (
+            "desconocido",
+            "No se encontró señal clara"
+        )
+
+    except TimeoutException:
+        print(
+            f"[{ahora()}] ⚠️ Timeout cargando Ticketmaster."
+        )
+
+        return (
+            "error",
+            "Timeout de carga"
+        )
+
+    except WebDriverException as e:
+        mensaje_error = str(e).lower()
+
+        print(
+            f"[{ahora()}] ⚠️ Error de Chrome/Selenium: "
+            f"{e}"
         )
 
         errores_chrome = [
-
             "tab crashed",
-
             "session deleted",
-
-            "invalid session",
-
-            "chrome not reachable",
-
             "disconnected",
-
-            "no such window",
-
-            "web view not found",
-
-            "chrome failed to start"
+            "chrome not reachable",
+            "invalid session id",
+            "target window already closed",
+            "browser connection",
         ]
 
-        if any(
-            error in mensaje_lower
-            for error in errores_chrome
-        ):
+        es_error_chrome = any(
+            palabra in mensaje_error
+            for palabra in errores_chrome
+        )
 
-            log(
-                "🔄 Se detectó un problema "
-                "real con Chrome."
+        if es_error_chrome:
+            estadisticas["recuperaciones_chrome"] += 1
+
+            print(
+                f"[{ahora()}] 🔧 Recuperando Chrome "
+                f"silenciosamente..."
             )
 
-            # ------------------------------------------------
-            # RECUPERACIÓN SILENCIOSA
-            # ------------------------------------------------
+            iniciar_driver(notificar=False)
 
-            iniciar_driver(
-                notificar=False
-            )
+        return (
+            "error",
+            "Error de Chrome/Selenium"
+        )
 
-        return "error"
+    except Exception as e:
+        print(
+            f"[{ahora()}] ❌ Error inesperado: {e}"
+        )
+
+        return (
+            "error",
+            str(e)[:200]
+        )
 
 
 # ============================================================
-# 📊 PROCESAR RESULTADO
+# PROCESAMIENTO DEL RESULTADO
 # ============================================================
 
-def procesar_resultado(
-    url,
-    estado
-):
-
-    evento = EVENTOS.get(
-        url,
-        "EVENTO"
-    )
+def procesar_resultado(url, estado, motivo):
+    anterior = estado_actual.get(url)
 
     estado_actual[url] = estado
 
-    log(
-        f"📊 {evento} → "
-        f"{estado.upper()}"
-    )
+    evento = EVENTOS.get(url, "EVENTO")
 
-    # ========================================================
-    # 🛡️ BLOQUEADO
-    # ========================================================
+    # --------------------------------------------------------
+    # BLOQUEADO
+    # --------------------------------------------------------
 
     if estado == "bloqueado":
 
-        estadisticas[
-            "bloqueado"
-        ] += 1
+        estadisticas["bloqueado"] += 1
 
         racha_bloqueos[url] += 1
 
-        notificar_bloqueo(
-            url
+        print(
+            f"[{ahora()}] 🛡️ {evento}: BLOQUEADO "
+            f"(racha {racha_bloqueos[url]})"
         )
 
-        log(
-            f"🛡️ Bloqueo consecutivo: "
-            f"{racha_bloqueos[url]}"
-        )
-
-        # NO cambiar último estado válido
-        return
-
-    # ========================================================
-    # PÁGINA NORMAL RECUPERADA
-    # ========================================================
-
-    if racha_bloqueos[url] > 0:
-
-        log(
-            f"✅ Página normal recuperada: "
-            f"{evento}"
-        )
-
-    racha_bloqueos[url] = 0
-
-    bloqueo_notificado[url] = False
-
-    # ========================================================
-    # ❌ AGOTADO
-    # ========================================================
-
-    if estado == "agotado":
-
-        estadisticas[
-            "agotado"
-        ] += 1
-
-        anterior = (
-            ultimo_estado_valido[url]
-        )
-
-        ultimo_estado_valido[url] = (
-            "agotado"
-        )
-
-        if (
-            anterior is None
-            or
-            anterior == "disponible"
-        ):
-
-            send_telegram(
-                "❌ ENTRADAS AGOTADAS\n\n"
-                f"🎫 Evento: {evento}\n\n"
-                f"{url}"
-            )
+        if racha_bloqueos[url] == 1:
+            alertar_bloqueo(url)
 
         return
 
-    # ========================================================
-    # 🚨 DISPONIBLE
-    # ========================================================
-
-    if estado == "disponible":
-
-        estadisticas[
-            "disponible"
-        ] += 1
-
-        ahora = time.time()
-
-        anterior = (
-            ultimo_estado_valido[url]
-        )
-
-        ultimo_estado_valido[url] = (
-            "disponible"
-        )
-
-        # ----------------------------------------------------
-        # ALERTA INMEDIATA
-        # ----------------------------------------------------
-
-        if (
-            ahora - ultima_alerta[url]
-            >= COOLDOWN_ALERTA
-        ):
-
-            log(
-                f"🚨 DISPONIBILIDAD DETECTADA: "
-                f"{evento}"
-            )
-
-            alerta_disponibilidad(
-                url
-            )
-
-            ultima_alerta[url] = ahora
-
-        # ----------------------------------------------------
-        # CAMBIO AGOTADO → DISPONIBLE
-        # ----------------------------------------------------
-
-        if anterior == "agotado":
-
-            log(
-                f"🚨 CAMBIO DE ESTADO: "
-                f"{evento} "
-                f"AGOTADO → DISPONIBLE"
-            )
-
-        return
-
-    # ========================================================
-    # ❓ DESCONOCIDO
-    # ========================================================
-
-    if estado == "desconocido":
-
-        estadisticas[
-            "desconocido"
-        ] += 1
-
-        log(
-            f"❓ Estado no confirmado: "
-            f"{evento}"
-        )
-
-        # NO modificar último estado válido
-        return
-
-    # ========================================================
-    # ⚠️ ERROR
-    # ========================================================
+    # --------------------------------------------------------
+    # ERROR
+    # --------------------------------------------------------
 
     if estado == "error":
 
-        log(
-            f"⚠️ Error temporal: "
-            f"{evento}"
+        estadisticas["errores"] += 1
+
+        print(
+            f"[{ahora()}] ⚠️ {evento}: ERROR - {motivo}"
         )
 
-        # NO modificar último estado válido
+        # El error no modifica el último estado válido.
+        return
+
+    # --------------------------------------------------------
+    # DESCONOCIDO
+    # --------------------------------------------------------
+
+    if estado == "desconocido":
+
+        estadisticas["desconocido"] += 1
+
+        print(
+            f"[{ahora()}] ❔ {evento}: DESCONOCIDO"
+        )
+
+        # No modifica el último estado válido.
+        return
+
+    # --------------------------------------------------------
+    # RECUPERACIÓN DESPUÉS DE BLOQUEO
+    # --------------------------------------------------------
+
+    if racha_bloqueos[url] > 0:
+        print(
+            f"[{ahora()}] 🔄 {evento}: "
+            f"Ticketmaster volvió a responder."
+        )
+
+        racha_bloqueos[url] = 0
+
+    # --------------------------------------------------------
+    # AGOTADO
+    # --------------------------------------------------------
+
+    if estado == "agotado":
+
+        estadisticas["agotado"] += 1
+
+        ultimo_estado_valido[url] = "agotado"
+
+        if anterior != "agotado":
+            print(
+                f"[{ahora()}] 🔴 {evento}: AGOTADO"
+            )
+        else:
+            print(
+                f"[{ahora()}] 🔴 {evento}: "
+                f"continúa AGOTADO"
+            )
+
+        return
+
+    # --------------------------------------------------------
+    # DISPONIBLE
+    # --------------------------------------------------------
+
+    if estado == "disponible":
+
+        estadisticas["disponible"] += 1
+
+        ultimo_estado_valido[url] = "disponible"
+
+        print(
+            f"[{ahora()}] 🟢 {evento}: "
+            f"DISPONIBLE -> {motivo}"
+        )
+
+        # Alertar inmediatamente.
+        # No exige doble confirmación.
+        alertar_disponibilidad(
+            url,
+            motivo
+        )
+
         return
 
 
 # ============================================================
-# ⏳ CALCULAR ESPERA POR BLOQUEO
+# TIEMPO DE ESPERA SEGÚN BLOQUEO
 # ============================================================
 
-def calcular_espera_bloqueo():
+def espera_por_bloqueo(url):
+    racha = racha_bloqueos[url]
 
-    mayor_racha = max(
-        racha_bloqueos.values()
+    if racha <= 1:
+        return ESPERA_BLOQUEO_1
+
+    if racha == 2:
+        return ESPERA_BLOQUEO_2
+
+    return ESPERA_BLOQUEO_3
+
+
+# ============================================================
+# RESUMEN DE CICLO
+# ============================================================
+
+def mostrar_resumen_ciclo():
+    print()
+    print("=" * 65)
+    print(
+        f"[{ahora()}] RESUMEN CICLO "
+        f"{estadisticas['ciclos']}"
     )
-
-    if mayor_racha <= 1:
-
-        return BLOQUEO_ESPERA_1
-
-    if mayor_racha == 2:
-
-        return BLOQUEO_ESPERA_2
-
-    return BLOQUEO_ESPERA_MAX
-
-
-# ============================================================
-# 🔁 CICLO
-# ============================================================
-
-def ejecutar_ciclo():
-
-    estadisticas[
-        "ciclos"
-    ] += 1
-
-    numero = estadisticas[
-        "ciclos"
-    ]
-
-    log(
-        f"\n🔁 CICLO {numero}"
-    )
-
-    resultados = {}
+    print("=" * 65)
 
     for url in URLS:
+        evento = EVENTOS.get(url, url)
 
-        estado = detectar_disponibilidad(
-            url
+        estado = estado_actual.get(url)
+        valido = ultimo_estado_valido.get(url)
+
+        print(
+            f"{evento}: "
+            f"actual={estado} | "
+            f"último válido={valido}"
         )
 
-        resultados[url] = estado
-
-        procesar_resultado(
-            url,
-            estado
-        )
-
-    return resultados
-
-
-# ============================================================
-# 📊 RESUMEN
-# ============================================================
-
-def mostrar_resumen():
-
-    log(
-        "\n📊 RESUMEN DEL CICLO"
+    print(
+        f"Tiempo activo: {tiempo_activo()}"
     )
 
-    for url in URLS:
+    print("=" * 65)
+    print()
 
-        evento = EVENTOS.get(
-            url,
-            "EVENTO"
+
+# ============================================================
+# ESPERA INTERRUMPIBLE
+# ============================================================
+
+def esperar(segundos):
+    inicio = time.time()
+
+    while time.time() - inicio < segundos:
+
+        enviar_heartbeat()
+
+        restante = segundos - (
+            time.time() - inicio
         )
-
-        actual = (
-            estado_actual[url]
-        )
-
-        valido = (
-            ultimo_estado_valido[url]
-        )
-
-        log(
-            f"   🎫 {evento}"
-        )
-
-        log(
-            f"      Estado actual: "
-            f"{actual}"
-        )
-
-        log(
-            f"      Último válido: "
-            f"{valido}"
-        )
-
-
-# ============================================================
-# 🚀 ARRANQUE
-# ============================================================
-
-log(
-    "🚀 MODO MONITOREO ACTIVADO"
-)
-
-log(
-    "🔎 Monitoreo de Ticketmaster iniciado"
-)
-
-
-# ============================================================
-# 🔐 VALIDAR TOKEN
-# ============================================================
-
-if not TOKEN:
-
-    log(
-        "❌ ERROR: TOKEN no configurado"
-    )
-
-    sys.exit(1)
-
-
-if not CHAT_ID:
-
-    log(
-        "❌ ERROR: CHAT_ID no configurado"
-    )
-
-    sys.exit(1)
-
-
-# ============================================================
-# 📲 TELEGRAM — ÚNICO MENSAJE DE INICIO
-# ============================================================
-#
-# Este mensaje solamente se ejecuta cuando comienza
-# una nueva ejecución del programa.
-#
-# Las recuperaciones internas de Chrome NO vuelven
-# a ejecutar esta sección.
-# ============================================================
-
-if send_telegram(
-    "🚀 BOT INICIANDO\n\n"
-    "✅ Railway conectado\n"
-    "📡 Telegram conectado\n"
-    "🔎 Preparando monitoreo...\n\n"
-    "🎫 Eventos configurados: 2"
-):
-
-    log(
-        "✅ Telegram conectado correctamente"
-    )
-
-else:
-
-    log(
-        "⚠️ Telegram no confirmó conexión"
-    )
-
-
-# ============================================================
-# 🌐 CHROME
-# ============================================================
-#
-# notificar=False es INTENCIONAL.
-#
-# No queremos que Chrome mande otro "BOT ACTIVO".
-# ============================================================
-
-if not iniciar_driver(
-    notificar=False
-):
-
-    log(
-        "❌ No fue posible iniciar Chrome."
-    )
-
-    sys.exit(1)
-
-
-# ============================================================
-# 🔄 LOOP PRINCIPAL
-# ============================================================
-
-while True:
-
-    try:
-
-        resultados = ejecutar_ciclo()
-
-        mostrar_resumen()
-
-        comprobar_heartbeat()
-
-        # ----------------------------------------------------
-        # ¿HAY BLOQUEO?
-        # ----------------------------------------------------
-
-        hay_bloqueo = any(
-            estado == "bloqueado"
-            for estado in resultados.values()
-        )
-
-        # ----------------------------------------------------
-        # ESPERA NORMAL
-        # ----------------------------------------------------
-
-        if not hay_bloqueo:
-
-            espera = random.randint(
-                MIN_ESPERA,
-                MAX_ESPERA
-            )
-
-            log(
-                f"⏳ Esperando "
-                f"{espera}s..."
-            )
-
-        # ----------------------------------------------------
-        # ESPERA SI REALMENTE ESTÁ BLOQUEADO
-        # ----------------------------------------------------
-
-        else:
-
-            espera = (
-                calcular_espera_bloqueo()
-            )
-
-            log(
-                "🛡️ Ticketmaster está "
-                "limitando temporalmente "
-                "la verificación."
-            )
-
-            log(
-                f"⏳ Próxima comprobación "
-                f"en {espera}s..."
-            )
 
         time.sleep(
-            espera
+            min(10, max(1, restante))
         )
 
-    # ========================================================
-    # 🛑 DETENCIÓN MANUAL
-    # ========================================================
 
-    except KeyboardInterrupt:
+# ============================================================
+# BUCLE PRINCIPAL
+# ============================================================
 
-        log(
-            "🛑 Bot detenido manualmente."
+def main():
+
+    global driver
+
+    print("=" * 65)
+    print("BOT DE MONITOREO TICKETMASTER - BTS")
+    print("=" * 65)
+
+    print(
+        f"[{ahora()}] Iniciando bot..."
+    )
+
+    print(
+        f"[{ahora()}] Eventos configurados: "
+        f"{len(URLS)}"
+    )
+
+    if not TOKEN:
+        print(
+            f"[{ahora()}] ⚠️ Falta variable TOKEN."
         )
+
+    if not CHAT_ID:
+        print(
+            f"[{ahora()}] ⚠️ Falta variable CHAT_ID."
+        )
+
+    # --------------------------------------------------------
+    # INICIAR CHROME
+    # --------------------------------------------------------
+
+    if not iniciar_driver(notificar=False):
+
+        enviar_telegram(
+            "❌ ERROR AL INICIAR EL BOT\n\n"
+            "No fue posible iniciar Chrome/Selenium "
+            "en Railway."
+        )
+
+        # Intentar continuamente sin enviar BOT ACTIVO.
+        while driver is None:
+
+            esperar(30)
+
+            if iniciar_driver(notificar=False):
+                break
+
+    # --------------------------------------------------------
+    # MENSAJE DE INICIO
+    # --------------------------------------------------------
+
+    mensaje_inicio()
+
+    print(
+        f"[{ahora()}] Monitoreo iniciado."
+    )
+
+    # --------------------------------------------------------
+    # BUCLE
+    # --------------------------------------------------------
+
+    while True:
 
         try:
 
-            if driver:
+            estadisticas["ciclos"] += 1
 
-                driver.quit()
+            print()
+            print(
+                "#" * 65
+            )
+            print(
+                f"[{ahora()}] "
+                f"INICIANDO CICLO "
+                f"{estadisticas['ciclos']}"
+            )
+            print(
+                "#" * 65
+            )
 
-        except Exception:
+            ciclo_tuvo_bloqueo = False
 
-            pass
+            # ------------------------------------------------
+            # REVISAR CADA EVENTO
+            # ------------------------------------------------
 
-        break
+            for url in URLS:
 
-    # ========================================================
-    # 💥 ERROR GENERAL
-    # ========================================================
+                estado, motivo = detectar_disponibilidad(
+                    url
+                )
 
-    except Exception as e:
+                procesar_resultado(
+                    url,
+                    estado,
+                    motivo
+                )
 
-        log(
-            f"❌ Error general: "
-            f"{str(e)[:500]}"
-        )
+                if estado == "bloqueado":
+                    ciclo_tuvo_bloqueo = True
 
-        estadisticas[
-            "error"
-        ] += 1
+                enviar_heartbeat()
 
-        try:
+            # ------------------------------------------------
+            # RESUMEN
+            # ------------------------------------------------
 
+            mostrar_resumen_ciclo()
+
+            # ------------------------------------------------
+            # ESPERA
+            # ------------------------------------------------
+
+            if ciclo_tuvo_bloqueo:
+
+                tiempos = [
+                    espera_por_bloqueo(url)
+                    for url in URLS
+                    if racha_bloqueos[url] > 0
+                ]
+
+                espera = max(
+                    tiempos
+                ) if tiempos else ESPERA_BLOQUEO_1
+
+                print(
+                    f"[{ahora()}] 🛡️ Bloqueo activo. "
+                    f"Esperando {espera} segundos."
+                )
+
+                esperar(espera)
+
+            else:
+
+                espera = random.randint(
+                    ESPERA_MIN,
+                    ESPERA_MAX
+                )
+
+                print(
+                    f"[{ahora()}] ⏳ Próximo ciclo "
+                    f"en {espera} segundos."
+                )
+
+                esperar(espera)
+
+        except KeyboardInterrupt:
+
+            print(
+                f"[{ahora()}] Bot detenido manualmente."
+            )
+
+            cerrar_driver()
+
+            break
+
+        except Exception as e:
+
+            estadisticas["errores"] += 1
+
+            print(
+                f"[{ahora()}] ❌ Error general "
+                f"en el ciclo: {e}"
+            )
+
+            # No mandar BOT ACTIVO.
+            # Recuperación silenciosa.
             if driver is None:
 
-                # --------------------------------------------
-                # RECUPERACIÓN SILENCIOSA
-                # --------------------------------------------
+                print(
+                    f"[{ahora()}] 🔧 "
+                    "Intentando recuperar Chrome..."
+                )
 
                 iniciar_driver(
                     notificar=False
                 )
 
-        except Exception:
+            esperar(30)
 
-            pass
 
-        time.sleep(30)
-```
+# ============================================================
+# EJECUCIÓN
+# ============================================================
+
+if __name__ == "__main__":
+    main()
