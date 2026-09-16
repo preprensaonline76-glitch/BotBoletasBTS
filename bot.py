@@ -1,3 +1,4 @@
+```python
 import os
 import time
 import random
@@ -9,7 +10,6 @@ from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
-from selenium.common.exceptions import WebDriverException
 
 
 # ============================================================
@@ -52,7 +52,7 @@ TIMEOUT_CARGA = 40
 ESPERA_RENDER_MIN = 2.0
 ESPERA_RENDER_MAX = 4.0
 
-# Repetición de alerta si continúa disponible
+# Cooldown de alerta de disponibilidad
 COOLDOWN_ALERTA = 30
 
 # Máximo de errores consecutivos de Telegram
@@ -69,6 +69,7 @@ BLOQUEO_ESPERA_MAX = 600
 # ============================================================
 
 def log(msg):
+
     print(msg)
     sys.stdout.flush()
 
@@ -503,10 +504,14 @@ driver = None
 
 
 def iniciar_driver(
-    notificar=True
+    notificar=False
 ):
 
     global driver
+
+    # --------------------------------------------------------
+    # Cerrar driver anterior
+    # --------------------------------------------------------
 
     try:
 
@@ -522,6 +527,10 @@ def iniciar_driver(
 
     driver = None
 
+    # --------------------------------------------------------
+    # Crear nuevo driver
+    # --------------------------------------------------------
+
     try:
 
         driver = crear_driver()
@@ -536,16 +545,31 @@ def iniciar_driver(
             "✅ Chrome iniciado correctamente"
         )
 
+        # ====================================================
+        # IMPORTANTE
+        # ====================================================
+        #
+        # La recuperación de Chrome es SILENCIOSA.
+        #
+        # Aunque se llame iniciar_driver()
+        # nuevamente después de un error:
+        #
+        # ❌ NO manda "BOT ACTIVO"
+        # ❌ NO manda "BOT INICIANDO"
+        # ❌ NO manda mensajes consecutivos
+        #
+        # El único mensaje de inicio se manda
+        # una sola vez al comenzar el programa.
+        # ====================================================
+
         if notificar:
 
-            return True
-
-        send_telegram(
-            "🚀 BOT ACTIVO\n\n"
-            "✅ Chrome iniciado correctamente\n"
-            "🔎 Monitoreo iniciado\n"
-            "📡 Telegram conectado"
-        )
+            send_telegram(
+                "🚀 BOT ACTIVO\n\n"
+                "✅ Chrome iniciado correctamente\n"
+                "🔎 Monitoreo iniciado\n"
+                "📡 Telegram conectado"
+            )
 
         return True
 
@@ -556,11 +580,12 @@ def iniciar_driver(
             f"{str(e)[:400]}"
         )
 
-        send_telegram(
-            "⚠️ ERROR DEL BOT\n\n"
-            "Chrome/Selenium no pudo iniciarse.\n\n"
-            "Revisa los logs de Railway."
-        )
+        # ----------------------------------------------------
+        # IMPORTANTE:
+        #
+        # El error de recuperación NO manda un nuevo
+        # mensaje de BOT ACTIVO.
+        # ----------------------------------------------------
 
         return False
 
@@ -569,28 +594,24 @@ def iniciar_driver(
 # 🧠 ESTADOS
 # ============================================================
 
-# Último estado confirmado en una página normal
 ultimo_estado_valido = {
     url: None
     for url in URLS
 }
 
 
-# Estado de la última consulta
 estado_actual = {
     url: None
     for url in URLS
 }
 
 
-# Última alerta de disponibilidad
 ultima_alerta = {
     url: 0
     for url in URLS
 }
 
 
-# Bloqueos consecutivos
 racha_bloqueos = {
     url: 0
     for url in URLS
@@ -658,18 +679,6 @@ def normalizar_texto(texto):
 # ============================================================
 # 🛡️ DETECCIÓN DE PROTECCIÓN
 # ============================================================
-#
-# MUY IMPORTANTE:
-#
-# Esta función NO busca frases de protección
-# en todo el page_source.
-#
-# Solo utiliza el TEXTO VISIBLE.
-#
-# Esto evita el problema que tenía la versión
-# anterior cuando encontraba frases dentro de
-# scripts, SVG, JavaScript o contenido oculto.
-# ============================================================
 
 def detectar_proteccion(
     texto_visible
@@ -716,10 +725,6 @@ def detectar_proteccion(
 
             return True
 
-    # --------------------------------------------------------
-    # Combinaciones que juntas sí son una señal fuerte
-    # --------------------------------------------------------
-
     tiene_unusual = (
         "unusual behavior" in texto
         or
@@ -740,7 +745,8 @@ def detectar_proteccion(
 
     if (
         tiene_unusual
-        and tiene_navegacion
+        and
+        tiene_navegacion
     ):
 
         return True
@@ -867,7 +873,7 @@ def contiene_alguna(
 
 
 # ============================================================
-# 🎯 COMPROBAR QUE PARECE SER UNA PÁGINA DEL EVENTO
+# 🎯 COMPROBAR PÁGINA DEL EVENTO
 # ============================================================
 
 def parece_pagina_evento(
@@ -885,10 +891,6 @@ def parece_pagina_evento(
 
     señales = 0
 
-    # --------------------------------------------------------
-    # Nombre del artista/evento
-    # --------------------------------------------------------
-
     if "bts" in texto:
 
         señales += 1
@@ -896,10 +898,6 @@ def parece_pagina_evento(
     elif "bts" in html_normalizado:
 
         señales += 1
-
-    # --------------------------------------------------------
-    # Ticketmaster
-    # --------------------------------------------------------
 
     if "ticketmaster" in texto:
 
@@ -909,17 +907,9 @@ def parece_pagina_evento(
 
         señales += 1
 
-    # --------------------------------------------------------
-    # Venta General
-    # --------------------------------------------------------
-
     if "venta general" in texto:
 
         señales += 1
-
-    # --------------------------------------------------------
-    # Elementos típicos del evento
-    # --------------------------------------------------------
 
     if (
         "octubre" in texto
@@ -941,7 +931,198 @@ def parece_pagina_evento(
 
 
 # ============================================================
-# 🔎 BOTONES DE COMPRA
+# 🚨 DETECTOR PRIORITARIO DE BOTÓN DISPONIBLE
+# ============================================================
+#
+# Esta función busca específicamente elementos que parezcan
+# botones reales de compra/selección.
+#
+# Es PRIORITARIA frente a las señales genéricas de texto.
+#
+# Además comprueba:
+#
+# - que sea visible
+# - que esté habilitado
+# - que tenga texto relacionado con compra/selección
+#
+# Esto evita tomar cualquier aparición de la palabra
+# "ticket" dentro de un elemento irrelevante como disponibilidad.
+# ============================================================
+
+def detectar_boton_disponible_prioritario():
+
+    try:
+
+        elementos = driver.find_elements(
+            By.CSS_SELECTOR,
+            "button, a, [role='button']"
+        )
+
+    except Exception:
+
+        return False
+
+    textos_prioritarios = [
+
+        "comprar",
+
+        "comprar entradas",
+
+        "comprar boletas",
+
+        "comprar tickets",
+
+        "seleccionar",
+
+        "seleccionar entradas",
+
+        "seleccionar boletas",
+
+        "seleccionar tickets",
+
+        "seleccionar asientos",
+
+        "select tickets",
+
+        "select seats",
+
+        "buy tickets",
+
+        "ver entradas",
+
+        "ver boletas",
+
+        "ver tickets",
+
+        "ver asientos"
+    ]
+
+    for elemento in elementos:
+
+        try:
+
+            if not elemento.is_displayed():
+
+                continue
+
+            try:
+
+                if not elemento.is_enabled():
+
+                    continue
+
+            except Exception:
+
+                pass
+
+            texto = normalizar_texto(
+                elemento.text
+            )
+
+            if not texto:
+
+                continue
+
+            # ------------------------------------------------
+            # Coincidencia directa con textos fuertes
+            # ------------------------------------------------
+
+            for palabra in textos_prioritarios:
+
+                if texto == palabra:
+
+                    log(
+                        f"🚨 Botón prioritario detectado: "
+                        f"'{texto}'"
+                    )
+
+                    return True
+
+            # ------------------------------------------------
+            # Coincidencia parcial para frases más largas
+            # ------------------------------------------------
+
+            if (
+                "comprar" in texto
+                and
+                (
+                    "entrada" in texto
+                    or
+                    "boleta" in texto
+                    or
+                    "ticket" in texto
+                )
+            ):
+
+                log(
+                    f"🚨 Botón de compra detectado: "
+                    f"'{texto[:120]}'"
+                )
+
+                return True
+
+            if (
+                "seleccionar" in texto
+                and
+                (
+                    "entrada" in texto
+                    or
+                    "boleta" in texto
+                    or
+                    "ticket" in texto
+                    or
+                    "asiento" in texto
+                )
+            ):
+
+                log(
+                    f"🚨 Botón de selección detectado: "
+                    f"'{texto[:120]}'"
+                )
+
+                return True
+
+            if (
+                "select" in texto
+                and
+                (
+                    "ticket" in texto
+                    or
+                    "seat" in texto
+                )
+            ):
+
+                log(
+                    f"🚨 Botón de selección detectado: "
+                    f"'{texto[:120]}'"
+                )
+
+                return True
+
+            if (
+                "ver entradas" in texto
+                or
+                "ver boletas" in texto
+                or
+                "ver tickets" in texto
+            ):
+
+                log(
+                    f"🚨 Botón para ver entradas detectado: "
+                    f"'{texto[:120]}'"
+                )
+
+                return True
+
+        except Exception:
+
+            continue
+
+    return False
+
+
+# ============================================================
+# 🔎 DETECCIÓN GENERAL DE BOTONES
 # ============================================================
 
 def detectar_botones_compra():
@@ -950,7 +1131,7 @@ def detectar_botones_compra():
 
         elementos = driver.find_elements(
             By.CSS_SELECTOR,
-            "button, a"
+            "button, a, [role='button']"
         )
 
     except Exception:
@@ -962,10 +1143,6 @@ def detectar_botones_compra():
         "comprar",
 
         "buy",
-
-        "tickets",
-
-        "ticket",
 
         "entradas",
 
@@ -989,6 +1166,10 @@ def detectar_botones_compra():
     for elemento in elementos:
 
         try:
+
+            if not elemento.is_displayed():
+
+                continue
 
             texto = normalizar_texto(
                 elemento.text
@@ -1045,6 +1226,10 @@ def detectar_enlaces_compra():
     for enlace in enlaces:
 
         try:
+
+            if not enlace.is_displayed():
+
+                continue
 
             href = enlace.get_attribute(
                 "href"
@@ -1199,11 +1384,6 @@ def detectar_disponibilidad(
         # ====================================================
         # 🛡️ PROTECCIÓN
         # ====================================================
-        #
-        # SOLO TEXTO VISIBLE.
-        #
-        # NO buscar protección en HTML.
-        # ====================================================
 
         if detectar_proteccion(
             texto
@@ -1249,14 +1429,6 @@ def detectar_disponibilidad(
         # ====================================================
         # ❌ AGOTADO — HTML
         # ====================================================
-        #
-        # Recuperamos la característica que hacía funcionar
-        # al bot antiguo.
-        #
-        # Pero no se usa como primera comprobación.
-        # Primero descartamos protección y comprobamos que
-        # parece tratarse del evento.
-        # ====================================================
 
         if es_evento:
 
@@ -1271,6 +1443,28 @@ def detectar_disponibilidad(
                 )
 
                 return "agotado"
+
+        # ====================================================
+        # 🚨 DISPONIBLE — BOTÓN PRIORITARIO
+        # ====================================================
+        #
+        # IMPORTANTE:
+        #
+        # Esta comprobación se hace ANTES de las señales
+        # genéricas de disponibilidad.
+        #
+        # Si Ticketmaster muestra un botón real de compra/
+        # selección, esta señal tiene prioridad.
+        # ====================================================
+
+        if detectar_boton_disponible_prioritario():
+
+            log(
+                "🚨 DISPONIBLE confirmado "
+                "mediante botón prioritario"
+            )
+
+            return "disponible"
 
         # ====================================================
         # 🚨 DISPONIBLE — TEXTO
@@ -1289,7 +1483,7 @@ def detectar_disponibilidad(
             return "disponible"
 
         # ====================================================
-        # 🚨 DISPONIBLE — BOTONES
+        # 🚨 DISPONIBLE — BOTONES GENERALES
         # ====================================================
 
         if detectar_botones_compra():
@@ -1373,6 +1567,10 @@ def detectar_disponibilidad(
                 "🔄 Se detectó un problema "
                 "real con Chrome."
             )
+
+            # ------------------------------------------------
+            # RECUPERACIÓN SILENCIOSA
+            # ------------------------------------------------
 
             iniciar_driver(
                 notificar=False
@@ -1459,10 +1657,6 @@ def procesar_resultado(
             "agotado"
         )
 
-        # Solo avisar cuando:
-        # - es la primera detección
-        # - o cambió desde disponible
-
         if (
             anterior is None
             or
@@ -1497,10 +1691,9 @@ def procesar_resultado(
             "disponible"
         )
 
-        # Alerta inmediata.
-        #
-        # Después puede volver a alertar
-        # cada 30 segundos.
+        # ----------------------------------------------------
+        # ALERTA INMEDIATA
+        # ----------------------------------------------------
 
         if (
             ahora - ultima_alerta[url]
@@ -1517,6 +1710,10 @@ def procesar_resultado(
             )
 
             ultima_alerta[url] = ahora
+
+        # ----------------------------------------------------
+        # CAMBIO AGOTADO → DISPONIBLE
+        # ----------------------------------------------------
 
         if anterior == "agotado":
 
@@ -1694,7 +1891,14 @@ if not CHAT_ID:
 
 
 # ============================================================
-# 📲 TELEGRAM
+# 📲 TELEGRAM — ÚNICO MENSAJE DE INICIO
+# ============================================================
+#
+# Este mensaje solamente se ejecuta cuando comienza
+# una nueva ejecución del programa.
+#
+# Las recuperaciones internas de Chrome NO vuelven
+# a ejecutar esta sección.
 # ============================================================
 
 if send_telegram(
@@ -1719,8 +1923,15 @@ else:
 # ============================================================
 # 🌐 CHROME
 # ============================================================
+#
+# notificar=False es INTENCIONAL.
+#
+# No queremos que Chrome mande otro "BOT ACTIVO".
+# ============================================================
 
-if not iniciar_driver():
+if not iniciar_driver(
+    notificar=False
+):
 
     log(
         "❌ No fue posible iniciar Chrome."
@@ -1834,6 +2045,10 @@ while True:
 
             if driver is None:
 
+                # --------------------------------------------
+                # RECUPERACIÓN SILENCIOSA
+                # --------------------------------------------
+
                 iniciar_driver(
                     notificar=False
                 )
@@ -1843,3 +2058,4 @@ while True:
             pass
 
         time.sleep(30)
+```
