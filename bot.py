@@ -812,14 +812,42 @@ def consultar_fecha(url):
 
     texto_visible, html = resultado_carga
 
-    try:
+try:
 
-        estado = detectar_estado_pagina(
-            texto_visible,
-            html
-        )
+    texto_normalizado = normalizar_texto(texto_visible)
+    html_normalizado = normalizar_texto(html)
 
-    except Exception as e:
+    print(
+        f"📏 Texto visible: {len(texto_visible)} caracteres"
+    )
+
+    print(
+        f"📏 HTML: {len(html)} caracteres"
+    )
+
+    # Mostrar una muestra de lo que realmente recibió Selenium
+    muestra = texto_visible[:1000].replace("\n", " ")
+
+    print(
+        f"📝 Texto recibido: {muestra}"
+    )
+
+    # Comprobación DIRECTA de agotado
+    if "agotado" in texto_normalizado:
+        print("🔴 PRUEBA DIRECTA: 'agotado' ENCONTRADO EN TEXTO VISIBLE")
+
+    elif "agotado" in html_normalizado:
+        print("🔴 PRUEBA DIRECTA: 'agotado' ENCONTRADO EN HTML")
+
+    else:
+        print("❌ PRUEBA DIRECTA: 'agotado' NO ENCONTRADO")
+
+    estado = detectar_estado_pagina(
+        texto_visible,
+        html
+    )
+
+except Exception as e:
 
         print(
             f"❌ Error detectando estado "
