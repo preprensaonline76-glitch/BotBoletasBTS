@@ -1,8 +1,8 @@
 import os
-import re
-import sys
 import time
 import random
+import sys
+import re
 import requests
 
 from selenium import webdriver
@@ -36,7 +36,7 @@ EVENTOS = {
 
 
 # ============================================================
-# ⚙️ CONFIGURACIÓN GENERAL
+# ⚙️ CONFIGURACIÓN
 # ============================================================
 
 MIN_ESPERA = 20
@@ -48,19 +48,20 @@ HEARTBEAT_INTERVAL = 5 * 60 * 60
 # Tiempo máximo de carga
 TIMEOUT_CARGA = 40
 
-# Espera después de cargar
-ESPERA_RENDER = 3
+# Espera para contenido dinámico
+ESPERA_RENDER_MIN = 2.0
+ESPERA_RENDER_MAX = 4.0
 
-# Alerta de disponibilidad cada 30 segundos
+# Repetición de alerta si continúa disponible
 COOLDOWN_ALERTA = 30
 
-# Máximo de errores consecutivos enviados por Telegram
+# Máximo de errores consecutivos de Telegram
 MAX_ERRORES_TELEGRAM = 10
 
-# Backoff cuando Ticketmaster está bloqueando
-ESPERA_BLOQUEO_1 = 120       # 2 minutos
-ESPERA_BLOQUEO_2 = 300       # 5 minutos
-ESPERA_BLOQUEO_MAX = 600     # 10 minutos
+# Esperas cuando Ticketmaster realmente devuelve protección
+BLOQUEO_ESPERA_1 = 120
+BLOQUEO_ESPERA_2 = 300
+BLOQUEO_ESPERA_MAX = 600
 
 
 # ============================================================
@@ -73,84 +74,144 @@ def log(msg):
 
 
 # ============================================================
-# ⏱️ TIEMPO DE ACTIVIDAD
+# ⏱️ TIEMPO ACTIVO
 # ============================================================
 
 inicio_bot = time.time()
 
 
-def tiempo_activo():
-    segundos = int(time.time() - inicio_bot)
+def obtener_tiempo_activo():
+
+    segundos = int(
+        time.time() - inicio_bot
+    )
 
     dias = segundos // 86400
-    horas = (segundos % 86400) // 3600
-    minutos = (segundos % 3600) // 60
-    seg = segundos % 60
+
+    horas = (
+        segundos % 86400
+    ) // 3600
+
+    minutos = (
+        segundos % 3600
+    ) // 60
+
+    segundos_restantes = (
+        segundos % 60
+    )
 
     if dias > 0:
-        return f"{dias}d {horas}h {minutos}m"
+
+        return (
+            f"{dias}d "
+            f"{horas}h "
+            f"{minutos}m"
+        )
 
     if horas > 0:
-        return f"{horas}h {minutos}m"
+
+        return (
+            f"{horas}h "
+            f"{minutos}m"
+        )
 
     if minutos > 0:
-        return f"{minutos}m {seg}s"
 
-    return f"{seg}s"
+        return (
+            f"{minutos}m "
+            f"{segundos_restantes}s"
+        )
+
+    return (
+        f"{segundos_restantes}s"
+    )
 
 
-def horas_activas_decimal():
-    return (time.time() - inicio_bot) / 3600
+def obtener_horas_activas():
+
+    return (
+        time.time() - inicio_bot
+    ) / 3600
 
 
 # ============================================================
 # 📲 TELEGRAM
 # ============================================================
 
-errores_telegram_consecutivos = 0
+errores_telegram = 0
 
 
-def send_telegram(msg, contar_error=True):
+def send_telegram(
+    mensaje,
+    contar_error=True
+):
 
-    global errores_telegram_consecutivos
+    global errores_telegram
 
-    if not TOKEN or not CHAT_ID:
-        log("❌ Faltan TOKEN o CHAT_ID")
+    if not TOKEN:
+
+        log(
+            "❌ TOKEN no configurado"
+        )
+
+        return False
+
+    if not CHAT_ID:
+
+        log(
+            "❌ CHAT_ID no configurado"
+        )
+
         return False
 
     try:
 
-        response = requests.post(
+        respuesta = requests.post(
             f"https://api.telegram.org/bot{TOKEN}/sendMessage",
             data={
                 "chat_id": CHAT_ID,
-                "text": msg
+                "text": mensaje
             },
             timeout=10
         )
 
-        if response.status_code == 200:
+        if respuesta.status_code == 200:
 
-            errores_telegram_consecutivos = 0
+            errores_telegram = 0
 
             return True
 
         log(
-            f"⚠️ Telegram respondió HTTP "
-            f"{response.status_code}"
+            f"⚠️ Telegram respondió "
+            f"{respuesta.status_code}"
         )
 
         if contar_error:
-            errores_telegram_consecutivos += 1
+
+            errores_telegram += 1
+
+            if (
+                errores_telegram
+                >= MAX_ERRORES_TELEGRAM
+            ):
+
+                log(
+                    "⚠️ Se alcanzó el límite "
+                    "de errores de Telegram."
+                )
 
         return False
 
     except Exception as e:
 
-        log(f"❌ Error Telegram: {e}")
+        log(
+            f"❌ Error Telegram: "
+            f"{str(e)[:300]}"
+        )
 
         if contar_error:
-            errores_telegram_consecutivos += 1
+
+            errores_telegram += 1
 
         return False
 
@@ -165,17 +226,20 @@ ultima_heartbeat = time.time()
 def enviar_heartbeat():
 
     agotados = sum(
-        1 for estado in ultimo_estado_valido.values()
+        1
+        for estado in ultimo_estado_valido.values()
         if estado == "agotado"
     )
 
     disponibles = sum(
-        1 for estado in ultimo_estado_valido.values()
+        1
+        for estado in ultimo_estado_valido.values()
         if estado == "disponible"
     )
 
     bloqueados = sum(
-        1 for estado in estado_actual.values()
+        1
+        for estado in estado_actual.values()
         if estado == "bloqueado"
     )
 
@@ -186,32 +250,53 @@ def enviar_heartbeat():
         "🔎 Monitoreo de Ticketmaster activo\n"
         "📡 Telegram conectado\n\n"
 
-        f"⏱️ Tiempo activo: {tiempo_activo()}\n"
-        f"🕐 Horas activas: {horas_activas_decimal():.2f} h\n\n"
+        f"⏱️ Tiempo activo: "
+        f"{obtener_tiempo_activo()}\n"
 
-        f"🔁 Ciclos realizados: {estadisticas['ciclos']}\n"
-        f"🎫 Detecciones AGOTADO: "
+        f"🕐 Horas activas: "
+        f"{obtener_horas_activas():.2f} h\n\n"
+
+        f"🔁 Ciclos realizados: "
+        f"{estadisticas['ciclos']}\n"
+
+        f"❌ Detecciones AGOTADO: "
         f"{estadisticas['agotado']}\n"
+
         f"🚨 Detecciones DISPONIBLE: "
         f"{estadisticas['disponible']}\n"
+
         f"🛡️ Bloqueos detectados: "
         f"{estadisticas['bloqueado']}\n"
+
+        f"❓ Desconocidos: "
+        f"{estadisticas['desconocido']}\n"
+
         f"⚠️ Errores Selenium: "
         f"{estadisticas['error']}\n\n"
 
-        f"📊 Estados válidos:\n"
-        f"❌ Agotados: {agotados}\n"
-        f"🚨 Disponibles: {disponibles}\n"
-        f"🛡️ Bloqueados ahora: {bloqueados}"
+        f"📊 Estados válidos actuales:\n"
+
+        f"❌ Agotados: "
+        f"{agotados}\n"
+
+        f"🚨 Disponibles: "
+        f"{disponibles}\n"
+
+        f"🛡️ Bloqueados ahora: "
+        f"{bloqueados}"
     )
 
     if send_telegram(mensaje):
 
-        log("💓 Heartbeat enviado correctamente")
+        log(
+            "💓 Heartbeat enviado correctamente"
+        )
 
     else:
 
-        log("⚠️ No se pudo enviar el heartbeat")
+        log(
+            "⚠️ No se pudo enviar heartbeat"
+        )
 
 
 def comprobar_heartbeat():
@@ -220,7 +305,10 @@ def comprobar_heartbeat():
 
     ahora = time.time()
 
-    if ahora - ultima_heartbeat >= HEARTBEAT_INTERVAL:
+    if (
+        ahora - ultima_heartbeat
+        >= HEARTBEAT_INTERVAL
+    ):
 
         enviar_heartbeat()
 
@@ -235,7 +323,7 @@ def alerta_disponibilidad(url):
 
     evento = EVENTOS.get(
         url,
-        "EVENTO DESCONOCIDO"
+        "EVENTO"
     )
 
     mensaje = (
@@ -266,6 +354,7 @@ bloqueo_notificado = {
 def notificar_bloqueo(url):
 
     if bloqueo_notificado[url]:
+
         return
 
     evento = EVENTOS.get(
@@ -274,15 +363,15 @@ def notificar_bloqueo(url):
     )
 
     mensaje = (
-        "🛡️ TICKETMASTER NO PERMITE VERIFICAR\n\n"
+        "🛡️ VERIFICACIÓN TEMPORALMENTE LIMITADA\n\n"
 
         f"🎫 Evento: {evento}\n\n"
 
-        "Ticketmaster está devolviendo una "
-        "página de protección en lugar de la "
-        "página normal del evento.\n\n"
+        "Ticketmaster está mostrando una "
+        "página de protección en lugar del "
+        "contenido normal del evento.\n\n"
 
-        "⚠️ El bot NO cambiará el último estado "
+        "⚠️ El bot conservará el último estado "
         "válido de las entradas.\n\n"
 
         "🔄 El monitoreo continuará automáticamente."
@@ -293,7 +382,8 @@ def notificar_bloqueo(url):
         bloqueo_notificado[url] = True
 
         log(
-            f"🛡️ Bloqueo notificado: {evento}"
+            f"🛡️ Bloqueo notificado: "
+            f"{evento}"
         )
 
 
@@ -305,27 +395,65 @@ def crear_driver():
 
     options = Options()
 
-    options.binary_location = "/usr/bin/chromium"
+    options.binary_location = (
+        "/usr/bin/chromium"
+    )
 
-    options.add_argument("--headless=new")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument(
+        "--headless=new"
+    )
 
-    options.add_argument("--disable-gpu")
-    options.add_argument("--disable-software-rasterizer")
-    options.add_argument("--disable-extensions")
+    options.add_argument(
+        "--no-sandbox"
+    )
 
-    options.add_argument("--disable-background-networking")
-    options.add_argument("--disable-sync")
-    options.add_argument("--metrics-recording-only")
-    options.add_argument("--mute-audio")
+    options.add_argument(
+        "--disable-dev-shm-usage"
+    )
 
-    options.add_argument("--disable-notifications")
-    options.add_argument("--disable-popup-blocking")
+    options.add_argument(
+        "--disable-gpu"
+    )
 
-    options.add_argument("--window-size=1365,900")
+    options.add_argument(
+        "--disable-software-rasterizer"
+    )
 
-    options.add_argument("--lang=es-CO")
+    options.add_argument(
+        "--disable-extensions"
+    )
+
+    options.add_argument(
+        "--disable-background-networking"
+    )
+
+    options.add_argument(
+        "--disable-sync"
+    )
+
+    options.add_argument(
+        "--metrics-recording-only"
+    )
+
+    options.add_argument(
+        "--mute-audio"
+    )
+
+    options.add_argument(
+        "--disable-notifications"
+    )
+
+    options.add_argument(
+        "--disable-popup-blocking"
+    )
+
+    options.add_argument(
+        "--window-size=1365,900"
+    )
+
+    options.add_argument(
+        "--lang=es-CO"
+    )
 
     options.add_argument(
         "--disable-background-timer-throttling"
@@ -339,7 +467,6 @@ def crear_driver():
         "--disable-renderer-backgrounding"
     )
 
-    # Mantener el mismo enfoque del bot antiguo
     options.add_argument(
         "--user-agent=Mozilla/5.0 "
         "(X11; Linux x86_64) "
@@ -348,23 +475,24 @@ def crear_driver():
         "Chrome/147.0.0.0 Safari/537.36"
     )
 
-    # Carga más rápida
-    options.page_load_strategy = "eager"
+    options.page_load_strategy = (
+        "eager"
+    )
 
     service = Service(
         "/usr/bin/chromedriver"
     )
 
-    driver_nuevo = webdriver.Chrome(
+    nuevo_driver = webdriver.Chrome(
         service=service,
         options=options
     )
 
-    driver_nuevo.set_page_load_timeout(
+    nuevo_driver.set_page_load_timeout(
         TIMEOUT_CARGA
     )
 
-    return driver_nuevo
+    return nuevo_driver
 
 
 # ============================================================
@@ -374,7 +502,9 @@ def crear_driver():
 driver = None
 
 
-def iniciar_driver(notificar=True):
+def iniciar_driver(
+    notificar=True
+):
 
     global driver
 
@@ -396,7 +526,6 @@ def iniciar_driver(notificar=True):
 
         driver = crear_driver()
 
-        # Abrir dominio principal primero
         driver.get(
             "https://www.ticketmaster.co"
         )
@@ -423,7 +552,8 @@ def iniciar_driver(notificar=True):
     except Exception as e:
 
         log(
-            f"❌ Error iniciando Chrome: {e}"
+            f"❌ Error iniciando Chrome: "
+            f"{str(e)[:400]}"
         )
 
         send_telegram(
@@ -439,14 +569,14 @@ def iniciar_driver(notificar=True):
 # 🧠 ESTADOS
 # ============================================================
 
-# Último estado válido confirmado
+# Último estado confirmado en una página normal
 ultimo_estado_valido = {
     url: None
     for url in URLS
 }
 
 
-# Estado observado actualmente
+# Estado de la última consulta
 estado_actual = {
     url: None
     for url in URLS
@@ -460,7 +590,7 @@ ultima_alerta = {
 }
 
 
-# Cantidad de bloqueos consecutivos
+# Bloqueos consecutivos
 racha_bloqueos = {
     url: 0
     for url in URLS
@@ -472,12 +602,18 @@ racha_bloqueos = {
 # ============================================================
 
 estadisticas = {
+
     "ciclos": 0,
+
     "agotado": 0,
+
     "disponible": 0,
+
     "bloqueado": 0,
-    "error": 0,
-    "desconocido": 0
+
+    "desconocido": 0,
+
+    "error": 0
 }
 
 
@@ -488,19 +624,27 @@ estadisticas = {
 def normalizar_texto(texto):
 
     if not texto:
+
         return ""
 
     texto = texto.lower()
 
-    texto = (
-        texto
-        .replace("á", "a")
-        .replace("é", "e")
-        .replace("í", "i")
-        .replace("ó", "o")
-        .replace("ú", "u")
-        .replace("ü", "u")
-    )
+    reemplazos = {
+
+        "á": "a",
+        "é": "e",
+        "í": "i",
+        "ó": "o",
+        "ú": "u",
+        "ü": "u"
+    }
+
+    for original, nuevo in reemplazos.items():
+
+        texto = texto.replace(
+            original,
+            nuevo
+        )
 
     texto = re.sub(
         r"\s+",
@@ -512,20 +656,34 @@ def normalizar_texto(texto):
 
 
 # ============================================================
-# 🛡️ DETECTAR PÁGINA DE PROTECCIÓN
+# 🛡️ DETECCIÓN DE PROTECCIÓN
+# ============================================================
+#
+# MUY IMPORTANTE:
+#
+# Esta función NO busca frases de protección
+# en todo el page_source.
+#
+# Solo utiliza el TEXTO VISIBLE.
+#
+# Esto evita el problema que tenía la versión
+# anterior cuando encontraba frases dentro de
+# scripts, SVG, JavaScript o contenido oculto.
 # ============================================================
 
-def detectar_proteccion(texto_visible, page_source):
+def detectar_proteccion(
+    texto_visible
+):
 
-    visible = normalizar_texto(
+    texto = normalizar_texto(
         texto_visible
     )
 
-    html = normalizar_texto(
-        page_source
-    )
+    if not texto:
 
-    frases_proteccion = [
+        return False
+
+    frases_fuertes = [
 
         "your browsing activity has been paused",
 
@@ -533,10 +691,7 @@ def detectar_proteccion(texto_visible, page_source):
 
         "we have detected unusual behavior",
 
-        "detected unusual behavior",
-
-        "unusual behavior on either your network "
-        "or your browser",
+        "unusual behavior on either your network or your browser",
 
         "browsing activity has been paused",
 
@@ -546,61 +701,83 @@ def detectar_proteccion(texto_visible, page_source):
 
         "switch devices or move to a different location",
 
-        "your browsing activity",
-
-        "unusual activity",
-
-        "actividad inusual",
-
-        "comportamiento inusual",
-
-        "actividad sospechosa",
-
         "hemos detectado actividad inusual",
 
-        "hemos detectado un comportamiento inusual"
+        "hemos detectado un comportamiento inusual",
+
+        "actividad inusual en tu red",
+
+        "comportamiento inusual"
     ]
 
-    # La comprobación principal se hace sobre
-    # el texto visible.
-    for frase in frases_proteccion:
+    for frase in frases_fuertes:
 
-        if frase in visible:
+        if frase in texto:
 
             return True
 
-    # También revisar HTML por si Ticketmaster
-    # entrega parte del mensaje fuera del texto
-    # visible.
-    for frase in frases_proteccion:
+    # --------------------------------------------------------
+    # Combinaciones que juntas sí son una señal fuerte
+    # --------------------------------------------------------
 
-        if frase in html:
+    tiene_unusual = (
+        "unusual behavior" in texto
+        or
+        "unusual activity" in texto
+        or
+        "actividad inusual" in texto
+    )
 
-            return True
+    tiene_navegacion = (
+        "browser" in texto
+        or
+        "browsing" in texto
+        or
+        "navegador" in texto
+        or
+        "red" in texto
+    )
+
+    if (
+        tiene_unusual
+        and tiene_navegacion
+    ):
+
+        return True
 
     return False
 
 
 # ============================================================
-# 🎫 PALABRAS DE AGOTADO
+# 🎫 PALABRAS AGOTADO
 # ============================================================
 
 PALABRAS_AGOTADO = [
 
-    "agotado",
-    "agotados",
-    "entrada agotada",
     "entradas agotadas",
-    "boleta agotada",
+
+    "entrada agotada",
+
     "boletas agotadas",
-    "ticket agotado",
+
+    "boleta agotada",
+
     "tickets agotados",
 
+    "ticket agotado",
+
+    "agotado",
+
+    "agotados",
+
     "sold out",
+
     "soldout",
 
     "no hay entradas",
+
     "no hay boletas",
+
     "no hay tickets",
 
     "no tickets available",
@@ -622,32 +799,43 @@ PALABRAS_AGOTADO = [
 
 
 # ============================================================
-# 🚨 PALABRAS DE DISPONIBILIDAD
+# 🚨 PALABRAS DISPONIBLE
 # ============================================================
 
 PALABRAS_DISPONIBLE = [
 
     "entradas disponibles",
+
     "boletas disponibles",
+
     "tickets disponibles",
 
     "asientos disponibles",
 
     "seleccionar entradas",
+
     "seleccionar boletas",
+
     "seleccionar tickets",
 
     "select tickets",
+
     "select seats",
 
     "ver entradas",
+
     "ver boletas",
+
     "ver tickets",
+
     "ver asientos",
 
     "comprar entradas",
+
     "comprar boletas",
+
     "comprar tickets",
+
     "comprar asientos",
 
     "buy tickets",
@@ -661,10 +849,13 @@ PALABRAS_DISPONIBLE = [
 
 
 # ============================================================
-# 🔍 BUSCAR PALABRAS
+# 🔍 CONTIENE PALABRA
 # ============================================================
 
-def contiene_alguna(texto, palabras):
+def contiene_alguna(
+    texto,
+    palabras
+):
 
     for palabra in palabras:
 
@@ -676,14 +867,88 @@ def contiene_alguna(texto, palabras):
 
 
 # ============================================================
-# 🔎 DETECTAR BOTONES DE COMPRA
+# 🎯 COMPROBAR QUE PARECE SER UNA PÁGINA DEL EVENTO
+# ============================================================
+
+def parece_pagina_evento(
+    texto_visible,
+    html
+):
+
+    texto = normalizar_texto(
+        texto_visible
+    )
+
+    html_normalizado = normalizar_texto(
+        html
+    )
+
+    señales = 0
+
+    # --------------------------------------------------------
+    # Nombre del artista/evento
+    # --------------------------------------------------------
+
+    if "bts" in texto:
+
+        señales += 1
+
+    elif "bts" in html_normalizado:
+
+        señales += 1
+
+    # --------------------------------------------------------
+    # Ticketmaster
+    # --------------------------------------------------------
+
+    if "ticketmaster" in texto:
+
+        señales += 1
+
+    elif "ticketmaster" in html_normalizado:
+
+        señales += 1
+
+    # --------------------------------------------------------
+    # Venta General
+    # --------------------------------------------------------
+
+    if "venta general" in texto:
+
+        señales += 1
+
+    # --------------------------------------------------------
+    # Elementos típicos del evento
+    # --------------------------------------------------------
+
+    if (
+        "octubre" in texto
+        or
+        "oct" in texto
+    ):
+
+        señales += 1
+
+    if (
+        "campin" in texto
+        or
+        "campín" in texto
+    ):
+
+        señales += 1
+
+    return señales >= 2
+
+
+# ============================================================
+# 🔎 BOTONES DE COMPRA
 # ============================================================
 
 def detectar_botones_compra():
 
     try:
 
-        botones = driver.find_elements(
+        elementos = driver.find_elements(
             By.CSS_SELECTOR,
             "button, a"
         )
@@ -692,30 +957,36 @@ def detectar_botones_compra():
 
         return False
 
-    palabras_compra = [
+    palabras = [
 
         "comprar",
+
         "buy",
 
         "tickets",
+
         "ticket",
 
         "entradas",
+
         "entrada",
 
         "boletas",
+
         "boleta",
 
         "select",
+
         "seleccionar",
 
         "ver entradas",
+
         "ver boletas",
 
         "ver tickets"
     ]
 
-    for elemento in botones:
+    for elemento in elementos:
 
         try:
 
@@ -724,11 +995,12 @@ def detectar_botones_compra():
             )
 
             if not texto:
+
                 continue
 
             if contiene_alguna(
                 texto,
-                palabras_compra
+                palabras
             ):
 
                 return True
@@ -741,7 +1013,7 @@ def detectar_botones_compra():
 
 
 # ============================================================
-# 🔗 DETECTAR ENLACES DE COMPRA
+# 🔗 ENLACES DE COMPRA
 # ============================================================
 
 def detectar_enlaces_compra():
@@ -757,12 +1029,16 @@ def detectar_enlaces_compra():
 
         return False
 
-    palabras_url = [
+    palabras = [
 
         "checkout",
+
         "purchase",
+
         "buy",
+
         "ticket",
+
         "tickets"
     ]
 
@@ -775,6 +1051,7 @@ def detectar_enlaces_compra():
             )
 
             if not href:
+
                 continue
 
             href = normalizar_texto(
@@ -783,7 +1060,7 @@ def detectar_enlaces_compra():
 
             if contiene_alguna(
                 href,
-                palabras_url
+                palabras
             ):
 
                 return True
@@ -796,41 +1073,53 @@ def detectar_enlaces_compra():
 
 
 # ============================================================
-# 🎯 DETECCIÓN PRINCIPAL
+# 🔍 DETECCIÓN PRINCIPAL
 # ============================================================
 
-def detectar_disponibilidad(url):
+def detectar_disponibilidad(
+    url
+):
 
     global driver
 
     try:
 
+        # ----------------------------------------------------
+        # Comprobar driver
+        # ----------------------------------------------------
+
         if driver is None:
 
             log(
-                "⚠️ Driver inexistente. "
-                "Intentando iniciar..."
+                "⚠️ Driver inexistente."
             )
 
-            if not iniciar_driver():
+            if not iniciar_driver(
+                notificar=False
+            ):
 
                 return "error"
 
         # ----------------------------------------------------
-        # CARGAR URL
+        # Cargar página
         # ----------------------------------------------------
+
+        log(
+            f"🌐 Consultando: "
+            f"{EVENTOS.get(url, url)}"
+        )
 
         driver.get(url)
 
         time.sleep(
             random.uniform(
-                1.5,
-                ESPERA_RENDER
+                ESPERA_RENDER_MIN,
+                ESPERA_RENDER_MAX
             )
         )
 
         # ----------------------------------------------------
-        # OBTENER CONTENIDO
+        # Obtener HTML
         # ----------------------------------------------------
 
         try:
@@ -844,13 +1133,19 @@ def detectar_disponibilidad(url):
 
             page_source = ""
 
+        # ----------------------------------------------------
+        # Obtener texto visible
+        # ----------------------------------------------------
+
         try:
 
+            body = driver.find_element(
+                By.TAG_NAME,
+                "body"
+            )
+
             texto_visible = (
-                driver.find_element(
-                    By.TAG_NAME,
-                    "body"
-                ).text
+                body.text
                 or ""
             )
 
@@ -859,7 +1154,7 @@ def detectar_disponibilidad(url):
             texto_visible = ""
 
         # ----------------------------------------------------
-        # NORMALIZAR
+        # Normalizar
         # ----------------------------------------------------
 
         texto = normalizar_texto(
@@ -871,8 +1166,16 @@ def detectar_disponibilidad(url):
         )
 
         # ----------------------------------------------------
-        # DIAGNÓSTICO
+        # Información básica
         # ----------------------------------------------------
+
+        try:
+
+            titulo = driver.title or ""
+
+        except Exception:
+
+            titulo = ""
 
         log(
             f"📄 {EVENTOS.get(url, url)}"
@@ -888,34 +1191,30 @@ def detectar_disponibilidad(url):
             f"{len(page_source)} caracteres"
         )
 
-        # ----------------------------------------------------
-        # 🛡️ PRIMERO: PROTECCIÓN
-        # ----------------------------------------------------
+        log(
+            f"   Título: "
+            f"{titulo[:150]}"
+        )
+
+        # ====================================================
+        # 🛡️ PROTECCIÓN
+        # ====================================================
+        #
+        # SOLO TEXTO VISIBLE.
+        #
+        # NO buscar protección en HTML.
+        # ====================================================
 
         if detectar_proteccion(
-            texto,
-            html
+            texto
         ):
 
             log(
-                "🛡️ Ticketmaster devolvió "
-                "una página de protección"
+                "🛡️ Protección detectada "
+                "en texto visible"
             )
 
             return "bloqueado"
-
-        # ----------------------------------------------------
-        # PÁGINA VACÍA
-        # ----------------------------------------------------
-
-        if len(texto) < 15:
-
-            log(
-                "⚠️ Página con muy poco "
-                "contenido visible"
-            )
-
-            return "desconocido"
 
         # ====================================================
         # ❌ AGOTADO — TEXTO VISIBLE
@@ -934,30 +1233,47 @@ def detectar_disponibilidad(url):
             return "agotado"
 
         # ====================================================
+        # 🎫 PÁGINA DEL EVENTO
+        # ====================================================
+
+        es_evento = parece_pagina_evento(
+            texto,
+            html
+        )
+
+        log(
+            f"   Página de evento: "
+            f"{'SÍ' if es_evento else 'NO'}"
+        )
+
+        # ====================================================
         # ❌ AGOTADO — HTML
         # ====================================================
-
-        # Esto recupera la lógica que funcionaba
-        # en tu bot antiguo.
         #
-        # Importante:
-        # solo llegamos aquí después de haber
-        # descartado la página de protección.
+        # Recuperamos la característica que hacía funcionar
+        # al bot antiguo.
+        #
+        # Pero no se usa como primera comprobación.
+        # Primero descartamos protección y comprobamos que
+        # parece tratarse del evento.
+        # ====================================================
 
-        if contiene_alguna(
-            html,
-            PALABRAS_AGOTADO
-        ):
+        if es_evento:
 
-            log(
-                "❌ AGOTADO detectado "
-                "en HTML"
-            )
+            if contiene_alguna(
+                html,
+                PALABRAS_AGOTADO
+            ):
 
-            return "agotado"
+                log(
+                    "❌ AGOTADO detectado "
+                    "en HTML de página de evento"
+                )
+
+                return "agotado"
 
         # ====================================================
-        # 🚨 DISPONIBLE — TEXTO VISIBLE
+        # 🚨 DISPONIBLE — TEXTO
         # ====================================================
 
         if contiene_alguna(
@@ -986,7 +1302,7 @@ def detectar_disponibilidad(url):
             return "disponible"
 
         # ====================================================
-        # 🚨 DISPONIBLE — URL DE COMPRA
+        # 🚨 DISPONIBLE — ENLACES
         # ====================================================
 
         if detectar_enlaces_compra():
@@ -1004,51 +1320,58 @@ def detectar_disponibilidad(url):
 
         log(
             "❓ No se encontró una señal "
-            "clara de estado"
+            "clara de disponibilidad "
+            "o agotamiento"
         )
 
         return "desconocido"
 
     # ========================================================
-    # 💥 ERROR SELENIUM
+    # 💥 ERROR
     # ========================================================
 
     except Exception as e:
 
-        mensaje_error = str(e)
+        mensaje = str(e)
 
         log(
             f"⚠️ Error detectar: "
-            f"{mensaje_error[:500]}"
+            f"{mensaje[:500]}"
         )
 
         estadisticas["error"] += 1
 
-        error_lower = (
-            mensaje_error.lower()
+        mensaje_lower = (
+            mensaje.lower()
         )
 
         errores_chrome = [
 
             "tab crashed",
+
             "session deleted",
+
             "invalid session",
+
             "chrome not reachable",
+
             "disconnected",
+
             "no such window",
-            "web view not found"
+
+            "web view not found",
+
+            "chrome failed to start"
         ]
 
-        debe_reiniciar = any(
-            error in error_lower
+        if any(
+            error in mensaje_lower
             for error in errores_chrome
-        )
-
-        if debe_reiniciar:
+        ):
 
             log(
-                "🔄 Chrome parece haberse "
-                "caído. Reiniciando..."
+                "🔄 Se detectó un problema "
+                "real con Chrome."
             )
 
             iniciar_driver(
@@ -1067,18 +1390,17 @@ def procesar_resultado(
     estado
 ):
 
-    global ultimo_estado_valido
-
     evento = EVENTOS.get(
         url,
         "EVENTO"
     )
 
-    log(
-        f"📊 {evento} → {estado.upper()}"
-    )
-
     estado_actual[url] = estado
+
+    log(
+        f"📊 {evento} → "
+        f"{estado.upper()}"
+    )
 
     # ========================================================
     # 🛡️ BLOQUEADO
@@ -1086,43 +1408,38 @@ def procesar_resultado(
 
     if estado == "bloqueado":
 
-        estadisticas["bloqueado"] += 1
+        estadisticas[
+            "bloqueado"
+        ] += 1
 
         racha_bloqueos[url] += 1
 
-        notificar_bloqueo(url)
+        notificar_bloqueo(
+            url
+        )
 
         log(
             f"🛡️ Bloqueo consecutivo: "
             f"{racha_bloqueos[url]}"
         )
 
-        # MUY IMPORTANTE:
-        #
-        # NO modificar ultimo_estado_valido.
-        #
-        # Si anteriormente estaba AGOTADO,
-        # sigue considerándose AGOTADO como
-        # último estado confirmado.
-
+        # NO cambiar último estado válido
         return
 
     # ========================================================
-    # 🔧 RECUPERACIÓN DE PÁGINA NORMAL
+    # PÁGINA NORMAL RECUPERADA
     # ========================================================
 
-    if estado != "bloqueado":
+    if racha_bloqueos[url] > 0:
 
-        if racha_bloqueos[url] > 0:
+        log(
+            f"✅ Página normal recuperada: "
+            f"{evento}"
+        )
 
-            log(
-                f"✅ Página normal recuperada "
-                f"para {evento}"
-            )
+    racha_bloqueos[url] = 0
 
-        racha_bloqueos[url] = 0
-
-        bloqueo_notificado[url] = False
+    bloqueo_notificado[url] = False
 
     # ========================================================
     # ❌ AGOTADO
@@ -1130,7 +1447,9 @@ def procesar_resultado(
 
     if estado == "agotado":
 
-        estadisticas["agotado"] += 1
+        estadisticas[
+            "agotado"
+        ] += 1
 
         anterior = (
             ultimo_estado_valido[url]
@@ -1140,15 +1459,15 @@ def procesar_resultado(
             "agotado"
         )
 
-        if anterior == "disponible":
+        # Solo avisar cuando:
+        # - es la primera detección
+        # - o cambió desde disponible
 
-            send_telegram(
-                "❌ ENTRADAS AGOTADAS\n\n"
-                f"🎫 Evento: {evento}\n\n"
-                f"{url}"
-            )
-
-        elif anterior is None:
+        if (
+            anterior is None
+            or
+            anterior == "disponible"
+        ):
 
             send_telegram(
                 "❌ ENTRADAS AGOTADAS\n\n"
@@ -1164,7 +1483,9 @@ def procesar_resultado(
 
     if estado == "disponible":
 
-        estadisticas["disponible"] += 1
+        estadisticas[
+            "disponible"
+        ] += 1
 
         ahora = time.time()
 
@@ -1176,10 +1497,10 @@ def procesar_resultado(
             "disponible"
         )
 
-        # Alertar inmediatamente.
+        # Alerta inmediata.
         #
-        # Después repetir cada 30 segundos
-        # mientras continúe disponible.
+        # Después puede volver a alertar
+        # cada 30 segundos.
 
         if (
             ahora - ultima_alerta[url]
@@ -1191,14 +1512,16 @@ def procesar_resultado(
                 f"{evento}"
             )
 
-            alerta_disponibilidad(url)
+            alerta_disponibilidad(
+                url
+            )
 
             ultima_alerta[url] = ahora
 
         if anterior == "agotado":
 
             log(
-                f"🚨 CAMBIO: "
+                f"🚨 CAMBIO DE ESTADO: "
                 f"{evento} "
                 f"AGOTADO → DISPONIBLE"
             )
@@ -1211,14 +1534,16 @@ def procesar_resultado(
 
     if estado == "desconocido":
 
-        estadisticas["desconocido"] += 1
+        estadisticas[
+            "desconocido"
+        ] += 1
 
         log(
             f"❓ Estado no confirmado: "
             f"{evento}"
         )
 
-        # No modificar el último estado válido.
+        # NO modificar último estado válido
         return
 
     # ========================================================
@@ -1228,45 +1553,51 @@ def procesar_resultado(
     if estado == "error":
 
         log(
-            f"⚠️ Error temporal en {evento}"
+            f"⚠️ Error temporal: "
+            f"{evento}"
         )
 
-        # No modificar el último estado válido.
+        # NO modificar último estado válido
         return
 
 
 # ============================================================
-# ⏳ ESPERA POR BLOQUEO
+# ⏳ CALCULAR ESPERA POR BLOQUEO
 # ============================================================
 
 def calcular_espera_bloqueo():
 
-    max_racha = max(
+    mayor_racha = max(
         racha_bloqueos.values()
     )
 
-    if max_racha <= 1:
+    if mayor_racha <= 1:
 
-        return ESPERA_BLOQUEO_1
+        return BLOQUEO_ESPERA_1
 
-    if max_racha == 2:
+    if mayor_racha == 2:
 
-        return ESPERA_BLOQUEO_2
+        return BLOQUEO_ESPERA_2
 
-    return ESPERA_BLOQUEO_MAX
+    return BLOQUEO_ESPERA_MAX
 
 
 # ============================================================
-# 🔁 CICLO DE MONITOREO
+# 🔁 CICLO
 # ============================================================
 
-def ciclo():
+def ejecutar_ciclo():
 
-    estadisticas["ciclos"] += 1
+    estadisticas[
+        "ciclos"
+    ] += 1
+
+    numero = estadisticas[
+        "ciclos"
+    ]
 
     log(
-        f"\n🔁 CICLO "
-        f"{estadisticas['ciclos']}"
+        f"\n🔁 CICLO {numero}"
     )
 
     resultados = {}
@@ -1288,7 +1619,7 @@ def ciclo():
 
 
 # ============================================================
-# 📊 RESUMEN DE ESTADOS
+# 📊 RESUMEN
 # ============================================================
 
 def mostrar_resumen():
@@ -1304,9 +1635,13 @@ def mostrar_resumen():
             "EVENTO"
         )
 
-        actual = estado_actual[url]
+        actual = (
+            estado_actual[url]
+        )
 
-        valido = ultimo_estado_valido[url]
+        valido = (
+            ultimo_estado_valido[url]
+        )
 
         log(
             f"   🎫 {evento}"
@@ -1324,7 +1659,7 @@ def mostrar_resumen():
 
 
 # ============================================================
-# 🚀 INICIO DEL BOT
+# 🚀 ARRANQUE
 # ============================================================
 
 log(
@@ -1337,7 +1672,7 @@ log(
 
 
 # ============================================================
-# 🔐 VALIDAR VARIABLES
+# 🔐 VALIDAR TOKEN
 # ============================================================
 
 if not TOKEN:
@@ -1359,7 +1694,7 @@ if not CHAT_ID:
 
 
 # ============================================================
-# 📲 PRUEBA TELEGRAM
+# 📲 TELEGRAM
 # ============================================================
 
 if send_telegram(
@@ -1377,12 +1712,12 @@ if send_telegram(
 else:
 
     log(
-        "❌ No se pudo conectar con Telegram"
+        "⚠️ Telegram no confirmó conexión"
     )
 
 
 # ============================================================
-# 🌐 INICIAR CHROME
+# 🌐 CHROME
 # ============================================================
 
 if not iniciar_driver():
@@ -1402,24 +1737,24 @@ while True:
 
     try:
 
-        resultados = ciclo()
+        resultados = ejecutar_ciclo()
 
         mostrar_resumen()
 
         comprobar_heartbeat()
 
-        # ====================================================
-        # DETERMINAR SI HAY BLOQUEO
-        # ====================================================
+        # ----------------------------------------------------
+        # ¿HAY BLOQUEO?
+        # ----------------------------------------------------
 
         hay_bloqueo = any(
             estado == "bloqueado"
             for estado in resultados.values()
         )
 
-        # ====================================================
+        # ----------------------------------------------------
         # ESPERA NORMAL
-        # ====================================================
+        # ----------------------------------------------------
 
         if not hay_bloqueo:
 
@@ -1433,17 +1768,20 @@ while True:
                 f"{espera}s..."
             )
 
-        # ====================================================
-        # ESPERA POR BLOQUEO
-        # ====================================================
+        # ----------------------------------------------------
+        # ESPERA SI REALMENTE ESTÁ BLOQUEADO
+        # ----------------------------------------------------
 
         else:
 
-            espera = calcular_espera_bloqueo()
+            espera = (
+                calcular_espera_bloqueo()
+            )
 
             log(
-                "🛡️ Ticketmaster continúa "
-                "devolviendo protección."
+                "🛡️ Ticketmaster está "
+                "limitando temporalmente "
+                "la verificación."
             )
 
             log(
@@ -1456,7 +1794,7 @@ while True:
         )
 
     # ========================================================
-    # 🛑 CTRL + C
+    # 🛑 DETENCIÓN MANUAL
     # ========================================================
 
     except KeyboardInterrupt:
@@ -1468,9 +1806,11 @@ while True:
         try:
 
             if driver:
+
                 driver.quit()
 
         except Exception:
+
             pass
 
         break
@@ -1486,10 +1826,9 @@ while True:
             f"{str(e)[:500]}"
         )
 
-        estadisticas["error"] += 1
-
-        # Intentar recuperar solamente si
-        # realmente parece un problema del proceso.
+        estadisticas[
+            "error"
+        ] += 1
 
         try:
 
